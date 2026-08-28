@@ -1,0 +1,36 @@
+# --- SECRETS: never commit ---
+.env
+.env.*
+!.env.example
+.alpaca/
+*.pem
+*.key
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Data / journal ---
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+journal/*
+!journal/.gitkeep
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- MCP configs (may embed keys) ---
+mcp.json
+.mcp.json
+claude_desktop_config.json

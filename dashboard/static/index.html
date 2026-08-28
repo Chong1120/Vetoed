@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alpha Options Agent</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d;
+    --text: #e6edf3; --muted: #8b949e;
+    --green: #3fb950; --red: #f85149; --blue: #58a6ff; --amber: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  header {
+    padding: 18px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { font-size: 17px; margin: 0; letter-spacing: .5px; }
+  .sub { color: var(--muted); font-size: 12px; }
+  main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+  .tiles { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+  .tile .value { font-size: 23px; margin-top: 6px; }
+  .pos { color: var(--green); } .neg { color: var(--red); }
+  section { margin-top: 30px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
+       color: var(--muted); margin: 0 0 12px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel);
+          border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line);
+           font-size: 12.5px; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px;
+       text-transform: uppercase; letter-spacing: .6px; }
+  tr:last-child td { border-bottom: none; }
+  .wrap { overflow-x: auto; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 20px;
+          font-size: 11px; border: 1px solid; }
+  .ok { color: var(--green); border-color: var(--green); }
+  .no { color: var(--red); border-color: var(--red); }
+  .idle { color: var(--muted); border-color: var(--line); }
+  .rationale { color: var(--text); max-width: 520px; }
+  .veto { color: var(--red); font-size: 11.5px; margin-top: 4px; }
+  .reason { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+  .empty { color: var(--muted); padding: 18px; text-align: center;
+           border: 1px dashed var(--line); border-radius: 8px; }
+  svg { display: block; width: 100%; height: 200px;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ALPHA OPTIONS AGENT</h1>
+  <span class="sub">defined-risk credit spreads &middot; Alpaca paper &middot; every decision logged</span>
+</header>
+
+<main>
+  <div class="tiles" id="tiles"></div>
+
+  <section>
+    <h2>Equity curve</h2>
+    <svg id="chart" viewBox="0 0 800 200" preserveAspectRatio="none"></svg>
+  </section>
+
+  <section>
+    <h2>Open positions</h2>
+    <div class="wrap" id="positions"></div>
+  </section>
+
+  <section>
+    <h2>Decisions &mdash; including the ones risk vetoed</h2>
+    <div class="wrap" id="decisions"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const money = v => v == null ? "&mdash;" :
+  (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const cls = v => v == null ? "" : (v > 0 ? "pos" : v < 0 ? "neg" : "");
+
+async function get(url) { const r = await fetch(url); return r.json(); }
+
+function tiles(s) {
+  const items = [
+    ["Equity", money(s.equity_latest), ""],
+    ["Change", money(s.equity_change), cls(s.equity_change)],
+    ["Realised P&amp;L", money(s.realised_pnl), cls(s.realised_pnl)],
+    ["Open positions", s.open_positions ?? 0, ""],
+    ["Capital at risk", money(s.open_risk), ""],
+    ["Orders filled", (s.orders_filled ?? 0) + " / " + (s.orders_total ?? 0), ""],
+  ];
+  $("tiles").innerHTML = items.map(([l, v, c]) =>
+    `<div class="tile"><div class="label">${l}</div><div class="value ${c}">${v}</div></div>`).join("");
+}
+
+function chart(rows) {
+  const svg = $("chart");
+  if (!rows.length) { svg.innerHTML = `<text x="400" y="100" fill="#8b949e" text-anchor="middle" font-size="12">no equity snapshots yet</text>`; return; }
+  const vals = rows.map(r => r.equity);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.1 || 100;
+  const min = lo - pad, max = hi + pad;
+  const x = i => rows.length === 1 ? 400 : (i / (rows.length - 1)) * 780 + 10;
+  const y = v => 190 - ((v - min) / (max - min)) * 180;
+  const pts = rows.map((r, i) => `${x(i)},${y(r.equity)}`).join(" ");
+  const first = vals[0], last = vals[vals.length - 1];
+  const colour = last >= first ? "#3fb950" : "#f85149";
+  svg.innerHTML =
+    `<polyline fill="none" stroke="${colour}" stroke-width="2" points="${pts}"/>` +
+    `<line x1="10" y1="${y(first)}" x2="790" y2="${y(first)}" stroke="#30363d" stroke-dasharray="4 4"/>`;
+}
+
+function positions(rows) {
+  if (!rows.length) { $("positions").innerHTML = `<div class="empty">No open positions.</div>`; return; }
+  $("positions").innerHTML = `<table><thead><tr>
+    <th>Underlying</th><th>Kind</th><th>Short</th><th>Long</th>
+    <th>Qty</th><th>Credit</th><th>Max loss</th><th>Status</th></tr></thead><tbody>` +
+    rows.map(r => `<tr>
+      <td>${r.underlying ?? ""}</td><td>${r.kind ?? ""}</td>
+      <td>${r.short_symbol ?? ""}</td><td>${r.long_symbol ?? ""}</td>
+      <td>${r.contracts ?? ""}</td><td>${money(r.credit)}</td>
+      <td>${money(r.max_loss_total)}</td><td>${r.status ?? ""}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function decisions(rows) {
+  if (!rows.length) { $("decisions").innerHTML = `<div class="empty">No decisions recorded yet. Run the agent.</div>`; return; }
+  $("decisions").innerHTML = `<table><thead><tr>
+    <th>Time (UTC)</th><th>Action</th><th>Candidate</th><th>Conf.</th>
+    <th>Risk</th><th>Reasoning</th></tr></thead><tbody>` +
+    rows.map(d => {
+      const c = d.candidate_json || {};
+      const vetoes = d.risk_vetoes || [];
+      const reasons = d.risk_reasons || [];
+      const gate = d.risk_approved
+        ? `<span class="pill ok">approved &times;${d.risk_contracts}</span>`
+        : (vetoes.length ? `<span class="pill no">vetoed</span>`
+                         : `<span class="pill idle">n/a</span>`);
+      const spread = c.short_symbol
+        ? `${c.underlying} ${c.kind}<br><span class="reason">${c.short_strike}/${c.long_strike} &middot; ${c.dte}DTE &middot; POP ${c.pop}</span>`
+        : "&mdash;";
+      return `<tr>
+        <td>${(d.ts || "").replace("T", " ").replace("+00:00", "")}</td>
+        <td>${d.llm_action ?? "&mdash;"}</td>
+        <td>${spread}</td>
+        <td>${d.llm_confidence == null ? "&mdash;" : Number(d.llm_confidence).toFixed(2)}</td>
+        <td>${gate}</td>
+        <td class="rationale">${(d.llm_rationale || "").replace(/</g, "&lt;")}
+          ${vetoes.map(v => `<div class="veto">VETO: ${v}</div>`).join("")}
+          ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="reason">${r}</div>`).join("") : ""}
+          ${d.llm_error ? `<div class="veto">${d.llm_error}</div>` : ""}
+        </td></tr>`;
+    }).join("") + `</tbody></table>`;
+}
+
+async function refresh() {
+  try {
+    const [s, e, p, d] = await Promise.all([
+      get("/api/summary"), get("/api/equity"),
+      get("/api/positions"), get("/api/decisions?limit=60")]);
+    tiles(s); chart(e); positions(p); decisions(d);
+  } catch (err) { console.error(err); }
+}
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
