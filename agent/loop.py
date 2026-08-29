@@ -137,7 +137,8 @@ def _expiry_of(occ_symbol: str | None) -> date | None:
 
 # --------------------------------------------------------------------------- #
 
-async def run_cycle(dry_run: bool = True, force: bool = False) -> int:
+async def run_cycle(dry_run: bool = True, force: bool = False,
+                    use_llm: bool = True) -> int:
     journal.init()
     market = Market()
 
@@ -191,7 +192,7 @@ async def run_cycle(dry_run: bool = True, force: bool = False) -> int:
             cands, ctx,
             {"equity": equity, "day_pnl": acct_state.day_pnl,
              "open_positions": acct_state.open_positions},
-            open_rows)
+            open_rows, use_llm=use_llm)
         log("brain: %s (confidence %.2f)" % (decision.action, decision.confidence))
         if decision.error:
             log("brain error: %s" % decision.error)
@@ -271,6 +272,8 @@ def main() -> int:
                     help="run even when the market is closed")
     ap.add_argument("--schedule", action="store_true",
                     help="run continuously on a schedule")
+    ap.add_argument("--no-llm", action="store_true",
+                    help="skip Claude entirely; use deterministic selection")
     args = ap.parse_args()
 
     dry_run = not args.live
@@ -278,7 +281,7 @@ def main() -> int:
         log("*** LIVE MODE - orders WILL be submitted to the paper account ***")
 
     if not args.schedule:
-        return asyncio.run(run_cycle(dry_run, args.force))
+        return asyncio.run(run_cycle(dry_run, args.force, not args.no_llm))
 
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.cron import CronTrigger
@@ -287,7 +290,7 @@ def main() -> int:
 
     def job():
         try:
-            asyncio.run(run_cycle(dry_run, args.force))
+            asyncio.run(run_cycle(dry_run, args.force, not args.no_llm))
         except Exception as exc:
             log("CYCLE FAILED: %s: %s" % (type(exc).__name__, exc))
 

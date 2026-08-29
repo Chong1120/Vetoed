@@ -138,6 +138,51 @@ def no_trade(reason: str, raw: str = "", error: str = "") -> BrainDecision:
 
 
 # --------------------------------------------------------------------------- #
+# deterministic fallback - the agent runs with NO LLM at all
+# --------------------------------------------------------------------------- #
+
+FALLBACK_MIN_POP = 0.60     # don't take a coin-flip
+FALLBACK_MIN_EV = 2.00      # dollars per spread, after the EV model
+
+
+def deterministic_decide(shortlist: list[dict],
+                         note: str = "LLM disabled") -> BrainDecision:
+    """Rule-based selection: best expected value that clears a fixed bar.
+
+    Used when no Anthropic key is configured, or when --no-llm is passed. The
+    agent remains fully autonomous and fully safe - it simply stops exercising
+    judgement and follows arithmetic instead. Every downstream risk gate is
+    unchanged, so the safety properties do not depend on this choice.
+
+    The shortlist arrives sorted by score (EV per dollar risked), so the first
+    entry clearing the bar is the pick.
+    """
+    if not shortlist:
+        return no_trade("screener returned no candidates")
+
+    for i, c in enumerate(shortlist):
+        pop = float(c.get("pop") or 0)
+        ev = float(c.get("ev") or 0)
+        if pop >= FALLBACK_MIN_POP and ev >= FALLBACK_MIN_EV:
+            return BrainDecision(
+                "open_spread", i, c["underlying"],
+                [{"symbol": c["short_symbol"], "side": "sell"},
+                 {"symbol": c["long_symbol"], "side": "buy"}],
+                0,
+                "Deterministic selection (%s): highest EV per dollar risked "
+                "that clears POP >= %.2f and EV >= $%.2f. Chose %s %s %s/%s, "
+                "%dDTE, POP %.2f, EV $%.2f."
+                % (note, FALLBACK_MIN_POP, FALLBACK_MIN_EV, c["underlying"],
+                   c["kind"], c["short_strike"], c["long_strike"], c["dte"],
+                   pop, ev),
+                round(min(pop, 0.99), 2))
+
+    return no_trade(
+        "Deterministic selection (%s): no candidate cleared POP >= %.2f and "
+        "EV >= $%.2f. Sitting out." % (note, FALLBACK_MIN_POP, FALLBACK_MIN_EV))
+
+
+# --------------------------------------------------------------------------- #
 # defensive parsing
 # --------------------------------------------------------------------------- #
 
@@ -276,11 +321,19 @@ def build_prompt(shortlist: list[dict], context: dict,
 
 
 def decide(shortlist: list[dict], context: dict, account: dict,
-           open_positions: list[dict] | None = None) -> BrainDecision:
-    """Ask Claude to pick one candidate. Never raises - always returns a decision."""
+           open_positions: list[dict] | None = None,
+           use_llm: bool = True) -> BrainDecision:
+    """Pick one candidate. Never raises - always returns a decision.
+
+    Falls back to deterministic selection when the LLM is unavailable or
+    disabled, so the agent is never blocked on an Anthropic key.
+    """
     load_dotenv()
     if not shortlist:
         return no_trade("screener returned no candidates")
+
+    if not use_llm:
+        return deterministic_decide(shortlist, "--no-llm")
 
     # An unset ANTHROPIC_API_KEY does not necessarily mean no credentials -
     # the SDK also resolves ANTHROPIC_AUTH_TOKEN and `ant auth login` profiles.
@@ -288,6 +341,8 @@ def decide(shortlist: list[dict], context: dict, account: dict,
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if api_key.startswith("sk-ant-your"):
         api_key = ""
+    if not api_key and not os.getenv("ANTHROPIC_AUTH_TOKEN"):
+        return deterministic_decide(shortlist, "no ANTHROPIC_API_KEY")
 
     prompt = build_prompt(shortlist, context, account, open_positions or [])
 
@@ -304,11 +359,14 @@ def decide(shortlist: list[dict], context: dict, account: dict,
             messages=[{"role": "user", "content": prompt}],
         )
     except anthropic.APIStatusError as exc:
-        return no_trade("Claude API error (status %s)" % exc.status_code,
-                        error="%s: %s" % (type(exc).__name__, exc))
+        # An outage, an expired balance, or a bad key must not stop the agent.
+        d = deterministic_decide(shortlist, "Claude API error %s" % exc.status_code)
+        d.error = "%s: %s" % (type(exc).__name__, exc)
+        return d
     except Exception as exc:
-        return no_trade("Claude call failed",
-                        error="%s: %s" % (type(exc).__name__, exc))
+        d = deterministic_decide(shortlist, "Claude call failed")
+        d.error = "%s: %s" % (type(exc).__name__, exc)
+        return d
 
     text = ""
     for block in response.content:

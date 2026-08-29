@@ -102,6 +102,9 @@ ANTHROPIC_API_KEY=sk-ant-...
 # 3. one full cycle, DRY RUN — no orders submitted
 .venv\Scripts\python.exe -m agent.loop --force
 
+# 3b. same cycle with NO Claude at all — pure deterministic selection
+.venv\Scripts\python.exe -m agent.loop --force --no-llm
+
 # 4. LIVE — submits real paper orders
 .venv\Scripts\python.exe -m agent.loop --live
 
@@ -113,6 +116,16 @@ ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 `--live` is never the default. Every command above is a dry run unless you pass it.
+
+### Running without an Anthropic key
+
+The agent is **fully functional with Alpaca alone**. If no `ANTHROPIC_API_KEY`
+is configured — or if `--no-llm` is passed, or if the Claude API errors
+mid-session — `brain.py` falls back to deterministic selection: the highest
+expected value per dollar risked that clears `POP >= 0.60` and `EV >= $2.00`.
+
+Every risk gate is identical in both modes, so the safety properties never
+depend on whether the LLM ran. The difference is judgement, not protection.
 
 ## Tests
 

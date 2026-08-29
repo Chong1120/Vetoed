@@ -61,6 +61,12 @@ The model also returns a `contracts` field — **it is discarded**. Sizing is no
 a judgement call. When the model's suggestion differs from the risk module's
 sizing, both are logged.
 
+**Graceful degradation.** If the LLM is unavailable — no key, API error, or
+`--no-llm` — the agent does not stop. It falls back to deterministic selection
+(highest EV per dollar risked clearing a fixed POP/EV bar) and keeps trading
+autonomously. Every risk gate is unchanged in both modes: the safety properties
+are a property of the architecture, not of whether the model answered.
+
 **`risk.py` — permission (no LLM, can veto).** Pure functions of
 `(candidate, account_state)`. There is no override path, no confidence
 threshold that buys an exception, and no way for a persuasive rationale to
