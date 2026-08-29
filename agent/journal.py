@@ -221,10 +221,18 @@ def all_orders(limit: int = 200, path: str = DB_PATH) -> list[dict]:
 
 
 def open_spreads(path: str = DB_PATH) -> list[dict]:
-    """Orders that filled and have not been closed - our open risk."""
+    """Live orders that have not been closed - our real open risk.
+
+    'dry_run' MUST be excluded. risk.py reads this to enforce the
+    concentration limit and the portfolio risk cap, so counting simulated
+    orders here would invent risk that does not exist and could veto real
+    trades. 'failed' is excluded for the same reason - it never reached
+    the broker.
+    """
     return _rows(
         "SELECT * FROM orders WHERE closed_ts IS NULL"
-        " AND status NOT IN ('canceled','cancelled','rejected','expired')"
+        " AND status NOT IN ('canceled','cancelled','rejected','expired',"
+        "                    'dry_run','failed')"
         " ORDER BY id DESC", (), path)
 
 
