@@ -21,7 +21,7 @@ from agent import journal
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 
-app = FastAPI(title="Alpha Options Agent", docs_url="/api/docs")
+app = FastAPI(title="Vetoed", docs_url="/api/docs")
 
 
 @app.get("/api/summary")

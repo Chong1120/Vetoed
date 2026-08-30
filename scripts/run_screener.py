@@ -25,9 +25,15 @@ def main() -> int:
 
     print()
     for sym, d in ctx["underlyings"].items():
-        print("%-5s spot=%-9.2f atm_iv=%-8s rv20=%-8s iv/rv=%-6s rows=%d" % (
-            sym, d["spot"], d["atm_iv"], d["realized_vol_20d"],
-            d["iv_vs_rv"], d["contracts_examined"]))
+        if "error" in d:
+            print("%-5s ERROR %s" % (sym, d["error"][:70]))
+            continue
+        print("%-5s spot=%-9.2f sma20=%-9.2f trend=%-6s atm_iv=%-8s rv20=%-8s "
+              "iv/rv=%-6s rows=%d" % (
+                  sym, d["spot"], d["sma20"],
+                  "UP" if d["above_trend"] else "DOWN",
+                  d["atm_iv"], d["realized_vol_20d"],
+                  d["iv_vs_rv"], d["contracts_examined"]))
 
     print()
     print("candidates built : %d" % ctx["candidates_before_dedupe"])
@@ -39,16 +45,16 @@ def main() -> int:
         print("NO CANDIDATES. Loosen filters or check market data.")
         return 1
 
-    hdr = ("%-5s %-11s %-10s %3s %8s %8s %6s %7s %7s %6s %5s %7s %6s" % (
-        "SYM", "KIND", "EXPIRY", "DTE", "SHORT", "LONG", "WIDTH",
-        "CREDIT", "MAXLOSS", "DELTA", "POP", "EV", "SCORE"))
+    hdr = ("%-5s %-11s %-10s %3s %7s %7s %5s %6s %7s %5s %5s %7s %7s %6s" % (
+        "SYM", "KIND", "EXPIRY", "DTE", "SHORT", "LONG", "W",
+        "CREDIT", "MAXLOSS", "POP", "DELTA", "EV_RW", "EV_RN", "VRP"))
     print(hdr)
     print("-" * len(hdr))
     for c in shortlist:
-        print("%-5s %-11s %-10s %3d %8.1f %8.1f %6.1f %7.2f %7.0f %6.2f %5.2f %7.2f %6.3f" % (
+        print("%-5s %-11s %-10s %3d %7.1f %7.1f %5.1f %6.2f %7.0f %5.2f %5.2f %7.2f %7.2f %6.2f" % (
             c.underlying, c.kind, c.expiry, c.dte, c.short_strike,
             c.long_strike, c.width, c.credit, c.max_loss,
-            c.short_delta, c.pop, c.ev, c.score))
+            c.pop, c.short_delta, c.ev, c.ev_rn, c.vrp_edge))
 
     print()
     top = shortlist[0]
@@ -60,8 +66,10 @@ def main() -> int:
     print("  max loss $%.0f per spread, hard-capped" % top.max_loss)
     print("  short strike is %.2f%% OTM, delta %.2f, OI >= %d" % (
         top.distance_pct * 100, top.short_delta, top.min_open_interest))
-    print("  probability of profit ~%.0f%%, expected value ~$%.2f" % (
-        top.pop * 100, top.ev))
+    print("  real-world POP ~%.0f%% (from %.1f%% realised vol), EV $%.2f"
+          % (top.pop * 100, top.realized_vol * 100, top.ev))
+    print("  risk-neutral EV $%.2f -> volatility risk premium captured: $%.2f"
+          % (top.ev_rn, top.vrp_edge))
     return 0
 
 

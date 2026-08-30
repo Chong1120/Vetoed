@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS orders (
     credit          REAL,
     max_loss_total  REAL,
     status          TEXT,
+    entry_short_delta REAL,
+    entry_dte       INTEGER,
     filled_qty      REAL DEFAULT 0,
     fill_price      REAL,
     raw_json        TEXT,
@@ -107,9 +109,22 @@ def connect(path: str = DB_PATH):
         conn.close()
 
 
+# Columns added after the first schema shipped. SQLite has no
+# "ADD COLUMN IF NOT EXISTS", so attempt and ignore the duplicate error.
+MIGRATIONS = [
+    "ALTER TABLE orders ADD COLUMN entry_short_delta REAL",
+    "ALTER TABLE orders ADD COLUMN entry_dte INTEGER",
+]
+
+
 def init(path: str = DB_PATH) -> None:
     with connect(path) as c:
         c.executescript(SCHEMA)
+        for stmt in MIGRATIONS:
+            try:
+                c.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already present
 
 
 # --------------------------------------------------------------------------- #
@@ -157,14 +172,17 @@ def record_order(decision_id: int, candidate: dict, contracts: int,
             "INSERT INTO orders (decision_id, ts, alpaca_order_id,"
             " client_order_id, underlying, kind, short_symbol, long_symbol,"
             " contracts, limit_price, credit, max_loss_total, status,"
-            " filled_qty, fill_price, raw_json)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " entry_short_delta, entry_dte, filled_qty, fill_price, raw_json)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (decision_id, now(), result.get("id"),
              result.get("client_order_id"), candidate.get("underlying"),
              candidate.get("kind"), candidate.get("short_symbol"),
              candidate.get("long_symbol"), contracts, limit_price,
              candidate.get("credit"), max_loss_total,
-             str(result.get("status")), float(result.get("filled_qty") or 0),
+             str(result.get("status")),
+             abs(float(candidate.get("short_delta") or 0)) or None,
+             candidate.get("dte"),
+             float(result.get("filled_qty") or 0),
              result.get("filled_avg_price"), json.dumps(result)[:20000]))
         return int(cur.lastrowid)
 

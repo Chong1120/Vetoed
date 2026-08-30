@@ -23,15 +23,17 @@ import asyncio
 import sys
 from datetime import date, datetime
 
-from agent import brain, journal, risk
+from agent import adapt, brain, journal, risk
 from agent.data import Market
 from agent.executor import AlpacaMCP, new_client_order_id
-from agent.screener import screen
+from agent.screener import UNIVERSE, screen
 
 # Exit rules - these are what realise P&L inside a short contest window.
 TAKE_PROFIT_FRACTION = 0.50   # buy back at 50% of max profit
 STOP_LOSS_MULTIPLE = 2.0      # close if losing 2x the credit received
 CLOSE_AT_DTE = 1              # never carry into expiry day
+DELTA_STOP_MULTIPLE = 2.0     # short leg delta doubles -> price is coming at
+                              # us; exit now rather than wait for -2x credit
 
 
 def log(msg: str) -> None:
@@ -61,7 +63,7 @@ def _leg_map(positions) -> dict:
     return out
 
 
-async def manage_positions(mcp: AlpacaMCP, dry_run: bool) -> list[str]:
+async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool) -> list[str]:
     """Close spreads that hit profit target, stop loss, or approach expiry."""
     actions: list[str] = []
     open_rows = journal.open_spreads()
@@ -98,6 +100,17 @@ async def manage_positions(mcp: AlpacaMCP, dry_run: bool) -> list[str]:
             exp = _expiry_of(short_sym)
             if exp is not None and (exp - date.today()).days <= CLOSE_AT_DTE:
                 reason = "approaching expiry (DTE %d)" % (exp - date.today()).days
+            else:
+                # Delta stop: the short leg's delta doubling means the
+                # underlying is moving at us and the probability of loss has
+                # roughly doubled since entry. Cutting here turns some
+                # max-losses into partial losses.
+                entry_d = row.get("entry_short_delta")
+                if entry_d:
+                    now_d = market.option_delta(short_sym)
+                    if now_d and now_d >= float(entry_d) * DELTA_STOP_MULTIPLE:
+                        reason = ("delta stop (entry %.2f -> now %.2f)"
+                                  % (float(entry_d), now_d))
 
         if not reason:
             continue
@@ -150,7 +163,7 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
 
     async with AlpacaMCP() as mcp:
         # --- 1. manage what we already hold -------------------------------- #
-        closed = await manage_positions(mcp, dry_run)
+        closed = await manage_positions(mcp, market, dry_run)
 
         # --- 2. account snapshot ------------------------------------------- #
         acct = await mcp.account()
@@ -172,15 +185,24 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
         log("equity=$%.2f  day P&L=$%.2f  open=%d"
             % (equity, acct_state.day_pnl, acct_state.open_positions))
 
-        # --- 3. deterministic screen --------------------------------------- #
-        shortlist, ctx = screen(market)
+        # --- 3. deterministic screen, under adaptive guardrails ------------ #
+        # Two passes: the first establishes the volatility regime, the second
+        # re-screens under the guardrails that regime implies. The circuit
+        # breaker (own-trade history) applies to both.
+        _, probe_ctx = screen(market, universe=UNIVERSE[:1])
+        rails = adapt.build(probe_ctx)
+        for note in rails.notes:
+            log("guardrail: %s" % note)
+
+        shortlist, ctx = screen(market, overrides=rails.to_overrides())
+        ctx["guardrails"] = rails.to_dict()
         cands = [c.to_dict() for c in shortlist]
         log("screener returned %d candidates" % len(cands))
 
         run_id = journal.start_run(
             is_open, ctx.get("feed"), equity, acct_state.day_pnl,
             acct_state.halted, len(cands),
-            note="; ".join(closed) if closed else "")
+            note="; ".join(closed + rails.notes))
 
         if not cands:
             journal.record_decision(run_id, None, None, None,

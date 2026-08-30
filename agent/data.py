@@ -90,9 +90,20 @@ class MarketSnapshot:
     symbol: str
     spot: float
     realized_vol: float          # annualised, 20-day close-to-close
+    sma20: float                 # 20-day simple moving average of closes
     rows: list[OptionRow]
     feed: str
     asof: datetime
+
+    @property
+    def above_trend(self) -> bool:
+        """Spot above its 20-day average.
+
+        Used as a one-sided trend filter: selling PUT spreads into a market
+        already trending down is the single easiest way to turn a
+        high-probability trade into a max loss.
+        """
+        return bool(self.sma20 and self.spot > self.sma20)
 
 
 # --------------------------------------------------------------------------- #
@@ -158,14 +169,8 @@ class Market:
                 last_err = exc
         raise RuntimeError("no spot price for %s (%s)" % (symbol, last_err))
 
-    def realized_vol(self, symbol: str, lookback: int = 20) -> float:
-        """Annualised close-to-close volatility.
-
-        Used as the reference for whether options are RICH. True IV rank needs
-        a year of IV history, which Alpaca does not expose; comparing implied
-        against recent realised is the honest available substitute, and is
-        arguably the more relevant signal for a premium seller anyway.
-        """
+    def daily_closes(self, symbol: str, lookback: int = 20) -> list[float]:
+        """Recent daily closes. One fetch feeds both realised vol and SMA."""
         req = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
@@ -173,7 +178,19 @@ class Market:
             feed=DataFeed.IEX,
         )
         bars = self.stock.get_stock_bars(req).data.get(symbol, [])
-        closes = [float(b.close) for b in bars][-(lookback + 1):]
+        return [float(b.close) for b in bars][-(lookback + 1):]
+
+    @staticmethod
+    def realized_vol_from(closes: list[float]) -> float:
+        """Annualised close-to-close volatility.
+
+        This is the REAL-WORLD volatility estimate. It is the counterpart to
+        implied volatility (which is risk-neutral), and the gap between the
+        two is the volatility risk premium documented by Bakshi & Kapadia
+        (2003) and Carr & Wu (2009). The screener prices trades off implied
+        but estimates PROBABILITIES off this, which is what makes the edge
+        measurable rather than assumed.
+        """
         if len(closes) < 5:
             return float("nan")
         rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
@@ -181,6 +198,9 @@ class Market:
         mean = sum(rets) / n
         var = sum((r - mean) ** 2 for r in rets) / (n - 1)
         return math.sqrt(var) * math.sqrt(252)
+
+    def realized_vol(self, symbol: str, lookback: int = 20) -> float:
+        return self.realized_vol_from(self.daily_closes(symbol, lookback))
 
     # ----------------------------------------------------------------- #
 
@@ -244,14 +264,31 @@ class Market:
                 if s and s.implied_volatility is not None else None,
             ))
 
+        closes = self.daily_closes(symbol)
         return MarketSnapshot(
             symbol=symbol,
             spot=spot,
-            realized_vol=self.realized_vol(symbol),
+            realized_vol=self.realized_vol_from(closes),
+            sma20=(sum(closes) / len(closes)) if closes else 0.0,
             rows=rows,
             feed=self.feed.value,
             asof=datetime.now(),
         )
+
+
+    def option_delta(self, symbol: str) -> float | None:
+        """Current absolute delta of one contract. Used by the delta stop."""
+        try:
+            snap = self.option.get_option_snapshot(
+                OptionSnapshotRequest(symbol_or_symbols=[symbol],
+                                      feed=self.feed))
+            s = snap.get(symbol)
+            g = getattr(s, "greeks", None) if s else None
+            if g is not None and g.delta is not None:
+                return abs(float(g.delta))
+        except Exception:
+            pass
+        return None
 
 
 def atm_iv(rows: Iterable[OptionRow], spot: float) -> float | None:

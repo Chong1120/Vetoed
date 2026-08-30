@@ -32,25 +32,25 @@ from agent.screener import SpreadCandidate
 # LIMITS - the entire risk policy, in one auditable block
 # --------------------------------------------------------------------------- #
 
-MAX_RISK_PCT_PER_POSITION = 0.02    # 2% of equity at risk in any one spread
-MAX_TOTAL_RISK_PCT = 0.10           # 10% of equity at risk across all open
+MAX_RISK_PCT_PER_POSITION = 0.05    # 5% of equity at risk in any one spread
+MAX_TOTAL_RISK_PCT = 0.25           # 25% of equity at risk across all open
 MAX_CONCURRENT_POSITIONS = 5
 MAX_POSITIONS_PER_UNDERLYING = 2
 
 DAILY_LOSS_STOP_PCT = 0.03          # -3% on the day -> halt for the session
 
-MIN_DTE = 1                         # never 0DTE: gamma is brutal near expiry
-MAX_DTE = 10
+MIN_DTE = 2                         # 1DTE gamma is brutal; 2 is the floor
+MAX_DTE = 14
 
 MIN_OPEN_INTEREST = 250
 MAX_SPREAD_PCT = 0.25               # slightly looser than screener, as quotes
                                     # move between screening and execution
-MIN_CREDIT = 0.05                   # below this, fees and slippage dominate
+MIN_CREDIT = 0.10                   # below this, fees and slippage dominate
 
 MIN_IV = 0.03                       # < 3% implied vol is almost certainly bad data
 MAX_IV = 1.50                       # > 150% means an event we do not want to sell
 
-MAX_CONTRACTS_PER_ORDER = 10        # blast radius cap, independent of sizing
+MAX_CONTRACTS_PER_ORDER = 25        # blast radius cap, independent of sizing
 BUYING_POWER_HEADROOM = 0.50        # never commit more than 50% of options BP
 
 

@@ -1,7 +1,7 @@
 [project]
-name = "alpha-options-agent"
+name = "vetoed"
 version = "0.1.0"
-description = "Autonomous options-trading agent on Alpaca paper trading (lablab.ai x Alpaca hackathon)"
+description = "Vetoed - an autonomous options agent where the AI is the least-trusted component"
 requires-python = ">=3.11"
 dependencies = [
     "alpaca-py>=0.33.0",

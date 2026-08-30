@@ -18,8 +18,10 @@ def make_candidate(**over) -> SpreadCandidate:
         short_symbol="SPY260904P00765000", long_symbol="SPY260904P00760000",
         short_strike=765.0, long_strike=760.0, width=5.0,
         credit=1.20, max_loss=380.0, max_profit=120.0, credit_ratio=0.24,
-        short_delta=-0.25, long_delta=-0.15, pop=0.75, ev=25.0,
-        short_iv=0.13, min_open_interest=1500, worst_spread_pct=0.02,
+        short_delta=-0.25, long_delta=-0.15, pop=0.78, pop_rn=0.75,
+        ev=30.0, ev_rn=2.0, vrp_edge=28.0,
+        short_iv=0.13, realized_vol=0.11,
+        min_open_interest=1500, worst_spread_pct=0.02,
         distance_pct=0.0075, score=0.06,
     )
     base.update(over)
@@ -42,9 +44,9 @@ def test_valid_spread_is_approved_and_sized():
     d = evaluate(make_candidate(), make_account())
     assert d.approved, d.vetoes
     assert d.contracts >= 1
-    # 2% of 100k = $2000 budget / $380 max loss = 5 contracts
-    assert d.contracts == 5
-    assert d.max_loss_total == pytest.approx(1900.0)
+    # 5% of 100k = $5000 budget / $380 max loss = 13 contracts
+    assert d.contracts == 13
+    assert d.max_loss_total == pytest.approx(4940.0)
 
 
 def test_position_risk_never_exceeds_the_per_position_cap():
@@ -112,6 +114,12 @@ def test_zero_dte_is_vetoed():
     assert any("DTE" in v for v in d.vetoes)
 
 
+def test_one_dte_is_vetoed():
+    d = evaluate(make_candidate(dte=1), make_account())
+    assert not d.approved
+    assert any("DTE" in v for v in d.vetoes)
+
+
 def test_far_dated_is_vetoed():
     d = evaluate(make_candidate(dte=45), make_account())
     assert not d.approved
@@ -153,7 +161,7 @@ def test_max_per_underlying():
 
 def test_portfolio_risk_headroom_limits_size():
     """Already near the 10% portfolio cap -> size shrinks toward zero."""
-    acct = make_account(open_risk=9_800.0, open_positions=2,
+    acct = make_account(open_risk=24_900.0, open_positions=2,
                         positions_by_underlying={"QQQ": 2})
     contracts, _ = size_position(make_candidate(), acct)
     assert contracts == 0
@@ -180,4 +188,4 @@ def test_llm_cannot_influence_size():
     a = make_account()
     first, _ = size_position(c, a)
     second, _ = size_position(c, a)
-    assert first == second == 5
+    assert first == second == 13
