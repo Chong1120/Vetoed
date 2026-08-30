@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -33,21 +35,59 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SERVER_EXE = os.path.join(ROOT, ".venv", "Scripts", "alpaca-mcp-server.exe")
-SERVER_EXE_POSIX = os.path.join(ROOT, ".venv", "bin", "alpaca-mcp-server")
+SERVER_NAME = "alpaca-mcp-server"
 
 
 class MCPError(RuntimeError):
     pass
 
 
+def _server_candidates() -> list[str]:
+    """Every place the console script might reasonably live, in priority order.
+
+    The original version looked only inside `<repo>/.venv`, which exists on a
+    development machine and never on a CI runner - there, pip installs the
+    console script onto PATH beside the hosted interpreter. That made the
+    agent work locally and fail in GitHub Actions with "executable not found",
+    which reads like a missing dependency rather than a lookup bug.
+
+    The package ships no `__main__.py`, so `python -m alpaca_mcp_server` is not
+    an option and the console script has to be found on disk.
+    """
+    exe = SERVER_NAME + (".exe" if os.name == "nt" else "")
+    out = []
+
+    # 1. Explicit override, for anything the search below cannot anticipate.
+    override = os.getenv("ALPACA_MCP_SERVER_BIN", "").strip()
+    if override:
+        out.append(override)
+
+    # 2. On PATH. Covers CI runners and any ordinary pip install.
+    found = shutil.which(SERVER_NAME)
+    if found:
+        out.append(found)
+
+    # 3. Beside the interpreter actually running us - correct for ANY venv,
+    #    not just one that happens to sit at <repo>/.venv.
+    bindir = os.path.dirname(os.path.abspath(sys.executable))
+    out.append(os.path.join(bindir, exe))
+
+    # 4. The historical locations, kept so existing checkouts keep working.
+    out.append(os.path.join(ROOT, ".venv", "Scripts", SERVER_NAME + ".exe"))
+    out.append(os.path.join(ROOT, ".venv", "bin", SERVER_NAME))
+    return out
+
+
 def _server_command() -> str:
-    if os.path.exists(SERVER_EXE):
-        return SERVER_EXE
-    if os.path.exists(SERVER_EXE_POSIX):
-        return SERVER_EXE_POSIX
+    tried = _server_candidates()
+    for path in tried:
+        if path and os.path.exists(path):
+            return path
     raise MCPError(
-        "alpaca-mcp-server executable not found. Run: uv pip install alpaca-mcp-server")
+        "%s executable not found. Install it with:\n"
+        "    pip install alpaca-mcp-server\n"
+        "or set ALPACA_MCP_SERVER_BIN to its full path.\n"
+        "Looked in:\n  %s" % (SERVER_NAME, "\n  ".join(tried)))
 
 
 def _child_env() -> dict[str, str]:
