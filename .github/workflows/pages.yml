@@ -1,0 +1,50 @@
+# Publishes the dashboard to GitHub Pages on every push to main.
+#
+# The demo URL has to answer instantly whenever a judge opens it, so the site
+# is fully static - no server, nothing to spin down, nothing to sleep. Pushing
+# an updated journal/trades.db after a trading session is all it takes to
+# refresh the published page.
+#
+# scripts/export_static.py imports only agent/journal.py and the standard
+# library, so this needs no pip install step.
+name: Deploy dashboard to Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish; queue at most one behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Freeze the journal into site/
+        run: python scripts/export_static.py
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

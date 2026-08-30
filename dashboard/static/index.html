@@ -237,13 +237,39 @@ const cls = v => v == null || v === 0 ? "" : (v > 0 ? "pos" : "neg");
 const esc = s => String(s ?? "").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
 const shortTs = t => String(t || "").replace("T", " ").replace("+00:00", "").slice(0, 16);
 
-async function get(url) { const r = await fetch(url); return r.json(); }
+/* ------------------------------------------------------------------
+   Two modes, one page.
+
+     live    a server is answering /api/*  -> poll it every 15s
+     frozen  no server (GitHub Pages)      -> read the bundled data.json
+
+   The static build is the submitted demo URL, so it must render with no
+   runtime at all. Detect once on load rather than per request.
+   ------------------------------------------------------------------ */
+let MODE = null, SNAP = null;
+
+async function detectMode() {
+  try {
+    const r = await fetch("/api/summary", { cache: "no-store" });
+    if (r.ok) return "live";
+  } catch (e) { /* nothing serving here - fall through to the snapshot */ }
+  return "frozen";
+}
+
+async function get(key, query = "") {
+  if (MODE === "live") return (await fetch("/api/" + key + query)).json();
+  if (!SNAP) SNAP = await (await fetch("data.json", { cache: "no-store" })).json();
+  return SNAP[key];
+}
 
 /* ------------------------------------------------------------------ */
 function status(summary, runs) {
   const run = summary.last_run || runs[0] || null;
   const feed = run?.feed || "unknown";
   const bits = [];
+  if (MODE === "frozen" && SNAP && SNAP.generated_at) {
+    bits.push(`<span class="pill">snapshot &middot; ${esc(shortTs(SNAP.generated_at))} UTC</span>`);
+  }
   bits.push(`<span class="pill info">${esc(feed)} feed</span>`);
   if (run) {
     bits.push(`<span class="pill ${run.market_open ? "on" : "off"}">`
@@ -484,14 +510,19 @@ function decisions(rows) {
 async function refresh() {
   try {
     const [s, e, p, d, r, o] = await Promise.all([
-      get("/api/summary"), get("/api/equity"), get("/api/positions"),
-      get("/api/decisions?limit=60"), get("/api/runs?limit=30"), get("/api/orders?limit=200")]);
+      get("summary"), get("equity"), get("positions"),
+      get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200")]);
     status(s, r); kpis(s, o); chart(e); funnel(r, d, o);
     vols(r); positions(p); decisions(d);
   } catch (err) { console.error(err); }
 }
-refresh();
-setInterval(refresh, 15000);
+
+(async () => {
+  MODE = await detectMode();
+  await refresh();
+  // A frozen snapshot never changes, so do not poll it.
+  if (MODE === "live") setInterval(refresh, 15000);
+})();
 </script>
 </body>
 </html>
