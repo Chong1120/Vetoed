@@ -17,7 +17,8 @@ unattended operation is safe, which is the part a reviewer should check.
 
 ## Why systemd and not Docker
 
-Both were viable. systemd won on four counts specific to this project:
+Both were viable. systemd won on three counts specific to this project,
+and the Docker path has since been deleted because nothing used it:
 
 1. **Secrets.** `EnvironmentFile=` reads `/opt/vetoed/.env` at mode 600, owned
    by the service user. Docker's equivalents are worse: `--env-file` contents
@@ -28,11 +29,11 @@ Both were viable. systemd won on four counts specific to this project:
 3. **Signals.** systemd stops units with SIGTERM; `loop.py` handles it,
    finishes the cycle in flight, and releases the run lock. Getting that right
    in Docker needs correct PID-1 handling, which is easy to get wrong.
-4. **The repo already uses Docker for the dashboard**, and that image
-   deliberately contains no Alpaca SDK and no credentials. Reusing it for the
-   agent would undo exactly the property that makes it safe to publish.
 
-The dashboard keeps its Dockerfile. The agent gets systemd.
+A `Dockerfile` and a `render.yaml` used to exist for the dashboard. Neither
+was ever deployed — the public demo is a static GitHub Pages build and the
+VPS dashboard runs under systemd — so both were removed rather than left as
+scaffolding a reviewer would have to evaluate.
 
 ## The idempotency logic, exactly
 
@@ -191,119 +192,29 @@ throughout: *dry run*, *paper-account activity*, *historical snapshot*, and
 
 # Part 2 — The dashboard
 
-## What is in the image
+Read-only. There is no route in `dashboard/api.py` that can place, cancel, or
+modify an order, and it imports neither the Alpaca SDK nor the MCP client.
 
-`Dockerfile` copies exactly four things — `agent/__init__.py`,
-`agent/journal.py`, `dashboard/`, and `journal/trades.db`. It installs only
-FastAPI and uvicorn.
+There are two ways it runs, and they serve different purposes.
 
-Verified on the built image:
+## A. GitHub Pages — the public demo URL
+
+**This is the submitted Application URL.** It is a fully static build, so
+there is no server to spin down, no cold start, and nothing to sleep.
 
 ```
-/app/agent/__init__.py
-/app/agent/journal.py
-/app/dashboard/api.py
-/app/dashboard/static/index.html
-/app/journal/trades.db
+https://chong1120.github.io/Vetoed/
 ```
 
-- **No `.env`** — excluded by `.dockerignore` and never copied.
-- **No `alpaca-py`, no `anthropic`, no MCP client** — `import alpaca` fails
-  inside the container. The image physically cannot place an order.
-- **No secret environment variables.**
-- Runs as an unprivileged user (`viewer`, uid 1000).
+`.github/workflows/pages.yml` runs `scripts/export_static.py` on every push to
+`main`, which freezes every API response into `site/data.json` beside a copy of
+the page. No Python runs at request time.
 
-`dashboard/api.py` has no route that places, cancels, or modifies an order.
+This matters because free *application* hosting sleeps — Render spins down
+after 15 minutes, a free Hugging Face Space pauses after 48 hours — and nobody
+knows when a judge will open the link. A static site cannot have that problem.
 
-## Run it locally
-
-```bash
-docker build -t vetoed-dashboard .
-docker run -p 7860:7860 vetoed-dashboard
-# http://localhost:7860
-```
-
-## Option A — GitHub Pages (recommended: free, and never sleeps)
-
-**Use this one for the submitted Application URL.** It is a static site, so
-there is no server to spin down, no cold start, and no 48-hour pause. It
-answers instantly whenever a judge opens it, including at 3am a week from now.
-
-`.github/workflows/pages.yml` is already committed. You only have to switch
-Pages on once:
-
-1. Go to **repository → Settings → Pages**.
-2. Under **Build and deployment → Source**, choose **GitHub Actions**.
-   (Not "Deploy from a branch" — the workflow builds the site.)
-3. Go to the **Actions** tab and check the *Deploy dashboard to Pages* run. If
-   it did not fire, click it and press **Run workflow**.
-4. Your URL appears in Settings → Pages, and looks like
-   `https://<user>.github.io/Vetoed/`.
-
-Every later push to `main` rebuilds and republishes automatically.
-
-### How the same page serves both modes
-
-`index.html` probes `/api/summary` once when it loads:
-
-- **A server answers** (local, or Docker) → live mode, polling every 15s.
-- **Nothing answers** (GitHub Pages) → reads the bundled `data.json` and shows
-  a snapshot pill with the time it was frozen.
-
-So there is one page and no build step. Preview the static build locally:
-
-```bash
-python scripts/export_static.py
-cd site && python -m http.server 8080
-# http://localhost:8080
-```
-
-## Option B — Render (free, but sleeps)
-
-`render.yaml` is committed, so Render picks the settings up automatically.
-
-1. Sign in at <https://render.com> with GitHub.
-2. **New → Blueprint**, choose the `Vetoed` repository.
-3. Render reads `render.yaml`, builds the Dockerfile, and gives you
-   `https://vetoed-dashboard.onrender.com`.
-
-The free plan sleeps after 15 minutes idle, so a cold start takes about 30
-seconds. Open the link a minute before demoing it.
-
-## Option C — Hugging Face Spaces (free, pauses after 48h)
-
-No card needed, and it serves port 7860 by default, which the Dockerfile
-already uses. Free `cpu-basic` Spaces pause after 48 hours of inactivity, so
-treat this as a secondary live link rather than the submitted URL.
-
-1. Create a Space at <https://huggingface.co/new-space>, SDK **Docker**, blank
-   template.
-2. Push this repository to the Space remote:
-
-   ```bash
-   git remote add space https://huggingface.co/spaces/<user>/<space-name>
-   git push space main
-   ```
-
-3. The Space needs a `README.md` with Spaces front matter at the top:
-
-   ```
-   ---
-   title: Vetoed
-   emoji: 🛡️
-   colorFrom: gray
-   colorTo: green
-   sdk: docker
-   app_port: 7860
-   ---
-   ```
-
-   Add it on the Space only — it is not needed in the GitHub repo.
-
-## Keeping the demo current
-
-The dashboard reads `journal/trades.db`, which is committed. The agent writes
-to your local copy, so after a trading session:
+To refresh it after a trading session:
 
 ```bash
 git add journal/trades.db
@@ -311,13 +222,45 @@ git commit -m "Update journal"
 git push
 ```
 
-GitHub Pages, Render and Spaces all redeploy on push, so the demo updates
-itself. Nothing else to run.
+The workflow rebuilds and republishes automatically.
 
-**The journal is safe to commit.** It was audited before being un-ignored: no
-API keys, no Alpaca account id, no order ids, paper trading only. Re-check
-after live trading, because `orders.raw_json` will then contain real Alpaca
-order responses:
+## B. systemd on the VPS — live view alongside the agent
+
+For watching the agent while it runs, including the `/api/health` endpoint.
+
+```bash
+sudo systemctl enable --now vetoed-dashboard
+ssh -N -L 8000:127.0.0.1:8000 you@your-vps
+# http://localhost:8000
+```
+
+Bound to `127.0.0.1` on purpose — the page shows account equity and position
+detail. Reach it through an SSH tunnel rather than exposing it. Do not bind to
+`0.0.0.0` without a reverse proxy and authentication in front.
+
+## One page, two modes
+
+`index.html` probes `/api/summary` once on load:
+
+- **A server answers** (local, or the VPS unit) → live mode, polling every 15s
+- **Nothing answers** (GitHub Pages) → reads the bundled `data.json` and shows
+  a snapshot pill with the freeze time
+
+So there is one page and no build step. Preview the static build locally:
+
+```bash
+python scripts/export_static.py
+cd site && python -m http.server 8080
+```
+
+## Keeping the journal safe to publish
+
+`journal/trades.db` is committed — the dashboard has nothing to render without
+it. It was audited before being un-ignored: no API keys, no Alpaca account id,
+no order ids, paper trading only.
+
+**Re-check after live trading**, when `orders.raw_json` starts holding real
+broker responses:
 
 ```bash
 python - <<'PY'
