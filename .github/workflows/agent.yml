@@ -38,13 +38,16 @@ on:
   # for a tick. Defaults to a DRY RUN so an accidental click cannot trade.
   workflow_dispatch:
     inputs:
+      # GitHub renders `description` as the field label and hides the input
+      # name entirely, so the name is repeated here - otherwise the docs refer
+      # to `force` and the form shows an unlabelled checkbox.
       mode:
-        description: "dry-run journals a decision but submits nothing"
+        description: "mode - dry-run journals a decision but submits nothing"
         type: choice
         default: dry-run
         options: [dry-run, live]
       force:
-        description: "run even if the market is closed (dry-run only)"
+        description: "force - run a full cycle even if the market is closed (dry-run only)"
         type: boolean
         default: false
 
