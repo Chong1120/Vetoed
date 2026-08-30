@@ -102,21 +102,39 @@ def main() -> int:
     if decision.error:
         print("  error       : %s" % decision.error[:400])
 
-    # deterministic_decide() stamps its reason into the rationale, so this is
-    # how we tell a real model answer from a silent fallback.
+    # Three outcomes, not two. An earlier version of this script conflated the
+    # last two and reported success on a response that had been rejected.
     fell_back = "Deterministic selection" in (decision.rationale or "")
+    answered_but_invalid = (not fell_back) and bool(decision.error)
 
     print("\n" + "=" * 70)
     if fell_back:
-        print("  RESULT: fell back to deterministic selection")
+        print("  RESULT: the call failed - fell back to deterministic selection")
         print("=" * 70)
         print("\nThe LLM did not answer. The agent would still trade, using")
         print("arithmetic instead of judgement. Common causes:\n")
-        print("  401 / 403  -> key wrong, or not yet activated")
-        print("  404        -> model name not available on your plan;")
+        print("  401        -> key wrong, or not yet activated")
+        print("  403 + 1010 -> Cloudflare browser-signature ban; the client")
+        print("                must send a User-Agent (brain.USER_AGENT)")
+        print("  404        -> model not available on your plan;")
         print("                try --model Qwen/Qwen2.5-7B-Instruct")
         print("  429        -> out of credits or rate limited")
         print("  timeout    -> model too large or cold; try a smaller one")
+        return 1
+
+    if answered_but_invalid:
+        print("  RESULT: the model answered, but the response was REJECTED")
+        print("=" * 70)
+        print("\nThis is the safety layer working - a malformed answer cannot")
+        print("trade. But the judgement layer is not usable while it happens")
+        print("every time.\n")
+        print("  error: %s" % decision.error[:300])
+        if decision.raw:
+            print("\n  the model actually said:\n")
+            print(decision.raw[:400])
+        print("\nUsually the model ignored the required JSON shape. Try a")
+        print("stronger instruct model:")
+        print("  python scripts/check_llm.py --model Qwen/Qwen2.5-72B-Instruct")
         return 1
 
     print("  RESULT: the model answered and the response validated")

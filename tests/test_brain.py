@@ -391,3 +391,44 @@ def test_an_empty_choices_array_falls_back(monkeypatch):
     d = brain.decide(SHORTLIST_FOR_PROMPT, {"underlyings": {}, "feed": "opra"},
                      {"equity": 100000}, [])
     assert "Deterministic selection" in d.rationale
+
+
+def test_featherless_request_identifies_the_client(monkeypatch):
+    """Featherless sits behind Cloudflare, which 403s the default
+    "Python-urllib/3.x" User-Agent with error 1010 - a browser-signature ban
+    that looks exactly like a bad key until you read the response body. The
+    first live call failed on precisely this."""
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["ua"] = req.get_header("User-agent")
+        return _featherless_reply(GOOD_REPLY)
+
+    monkeypatch.setattr(brain.urllib.request, "urlopen", fake_urlopen)
+    brain.call_featherless("p", "rc-test")
+    assert seen["ua"] == brain.USER_AGENT
+    assert "urllib" not in (seen["ua"] or "").lower()
+
+
+def test_featherless_prompt_spells_out_the_required_json_shape(monkeypatch):
+    """Claude gets RESPONSE_SCHEMA enforced by the API; Featherless has no
+    equivalent. The first live call came back with {"decision": ...,
+    "reason": ...} and no legs, because the shape was never shown to it."""
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["user_msg"] = json.loads(req.data.decode())["messages"][1]["content"]
+        return _featherless_reply(GOOD_REPLY)
+
+    monkeypatch.setattr(brain, "load_dotenv", lambda *a, **k: False)
+    monkeypatch.setenv("FEATHERLESS_API_KEY", "rc-test")
+    monkeypatch.delenv("BRAIN_PROVIDER", raising=False)
+    monkeypatch.setattr(brain.urllib.request, "urlopen", fake_urlopen)
+    brain.decide(SHORTLIST_FOR_PROMPT, {"underlyings": {}, "feed": "opra"},
+                 {"equity": 100000}, [])
+
+    msg = seen["user_msg"]
+    for key in ("action", "candidate_id", "symbol", "legs", "contracts",
+                "rationale", "confidence"):
+        assert '"%s"' % key in msg, "prompt never names %r" % key
+    assert "copied exactly" in msg or "character for character" in msg

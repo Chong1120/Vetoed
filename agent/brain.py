@@ -59,6 +59,14 @@ from dotenv import load_dotenv
 
 FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
 
+# Featherless sits behind Cloudflare, which rejects the default
+# "Python-urllib/3.x" User-Agent with a 403 and Cloudflare error 1010 - a
+# browser-signature ban, not an auth failure, so it looks exactly like a bad
+# key until you read the body. The requests and openai packages avoid it only
+# because they set a User-Agent of their own. This identifies the client
+# honestly rather than impersonating a browser.
+USER_AGENT = "vetoed/0.1 (+https://github.com/Chong1120/Vetoed)"
+
 # Overridable because model availability depends on the plan. If this one is
 # not on yours, set FEATHERLESS_MODEL - scripts/check_llm.py will tell you.
 FEATHERLESS_MODEL = os.getenv("FEATHERLESS_MODEL",
@@ -421,6 +429,41 @@ def build_prompt(shortlist: list[dict], context: dict,
     )
 
 
+# Claude is given RESPONSE_SCHEMA through output_config and the API enforces
+# it. Featherless has no equivalent, and an open-weight model asked for "the
+# JSON object matching the schema" will happily invent its own key names - the
+# first live call came back with {"decision": ..., "reason": ...} and no legs
+# at all. validate() rejected it, correctly, but a judgement layer that is
+# always rejected is not a judgement layer. So the shape is spelled out.
+JSON_INSTRUCTIONS = """
+
+Reply with ONE JSON object and nothing else. No prose before or after it, no \
+markdown fences.
+
+Every key below is required and must be spelled exactly as shown:
+
+{
+  "action": "open_spread" or "no_trade",
+  "candidate_id": <integer index into the shortlist above, or -1 for no_trade>,
+  "symbol": "<underlying ticker of the candidate you chose, or empty string>",
+  "legs": [
+    {"symbol": "<the candidate's short_symbol, copied exactly>", "side": "sell"},
+    {"symbol": "<the candidate's long_symbol, copied exactly>",  "side": "buy"}
+  ],
+  "contracts": <integer; advisory only, the risk module decides the real size>,
+  "rationale": "<2-4 sentences explaining the choice>",
+  "confidence": <number from 0.0 to 1.0>
+}
+
+The two leg symbols must be copied character for character from the candidate \
+you selected. They are checked against the shortlist, and any mismatch means \
+the trade is discarded.
+
+To pass: {"action": "no_trade", "candidate_id": -1, "symbol": "", "legs": [], \
+"contracts": 0, "rationale": "...", "confidence": 0.0}
+"""
+
+
 def call_featherless(prompt: str, api_key: str, model: str | None = None,
                      timeout: int = LLM_TIMEOUT_SECONDS) -> str:
     """One chat completion against Featherless. Returns the raw text.
@@ -448,7 +491,8 @@ def call_featherless(prompt: str, api_key: str, model: str | None = None,
     req = urllib.request.Request(
         FEATHERLESS_URL, data=body, method="POST",
         headers={"Content-Type": "application/json",
-                 "Authorization": "Bearer %s" % api_key})
+                 "Authorization": "Bearer %s" % api_key,
+                 "User-Agent": USER_AGENT})
 
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
@@ -460,8 +504,9 @@ def call_featherless(prompt: str, api_key: str, model: str | None = None,
 
 
 def _decide_featherless(shortlist, prompt, api_key):
+    # Claude's schema is enforced by the API, so its prompt stays lean.
     try:
-        text = call_featherless(prompt, api_key)
+        text = call_featherless(prompt + JSON_INSTRUCTIONS, api_key)
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
