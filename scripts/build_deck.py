@@ -339,7 +339,7 @@ def build() -> str:
     eyebrow(s, "Separation of powers")
     heading(s, "The model proposes. Deterministic code disposes.")
     nodes = [("screener.py", "what is VALID\npure arithmetic", PANEL, LINE, TEXT),
-             ("brain.py", "what is GOOD\nthe only LLM", WARN_BG, WARN, WARN),
+             ("brain.py", "what is GOOD\nFeatherless AI", WARN_BG, WARN, WARN),
              ("risk.py", "what is ALLOWED\n8 hard gates", PANEL, LINE, TEXT)]
     # Sized so three nodes plus two gaps land inside the margins: the first
     # attempt at 3.5in overhung the right edge by 0.07in.
@@ -358,7 +358,7 @@ def build() -> str:
     rows = [("Echoed legs are compared to the real candidate", "hallucination → no-trade", LOSS),
             ("The model returns contracts, and it is discarded", "cannot size", LOSS),
             ("No tool output reaches it; the rest is whitelisted", "controlled vocabulary", LOSS),
-            ("No API key? Deterministic selection runs instead", "still autonomous", PROFIT)]
+            ("No LLM at all? Deterministic selection runs instead", "still autonomous", PROFIT)]
     y = Inches(4.35)
     for label, tag, col in rows:
         text(s, M, y, Inches(7.4), Inches(0.35), label, size=14, color=DIM)
@@ -459,7 +459,7 @@ def build() -> str:
          "chong1120.github.io/Vetoed", size=17, font=MONO, color=ACCENT,
          bold=True)
     x = M + Inches(7.1)
-    card(s, x, Inches(2.85), Inches(2.15), Inches(1.35), "Tests", "184",
+    card(s, x, Inches(2.85), Inches(2.15), Inches(1.35), "Tests", "199",
          "passing", PROFIT, 30)
     card(s, x + Inches(2.35), Inches(2.85), Inches(2.15), Inches(1.35),
          "LLM writes", "0", "to the broker", TEXT, 30)
@@ -505,7 +505,7 @@ def build() -> str:
     text(s, M, Inches(4.85), CONTENT_W, Inches(1.3),
          [("chong1120.github.io/Vetoed\n", {"color": ACCENT, "bold": True}),
           ("github.com/Chong1120/Vetoed\n", {"color": DIM}),
-          ("MIT  ·  Alpaca paper trading  ·  184 tests", {"color": MUTED})],
+          ("MIT  ·  Alpaca paper trading  ·  199 tests", {"color": MUTED})],
          size=14, font=MONO, spacing=1.75)
 
     prs.save(OUT)

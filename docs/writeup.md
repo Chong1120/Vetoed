@@ -112,6 +112,30 @@ rejected for carrying no measurable gap**. (This is a *historical* snapshot,
 QQQ is the one to look at: implied volatility *below* realised, so both its
 structurally valid spreads scored a negative gap and neither was taken.
 
+## 2a. The judgement layer
+
+Candidate selection runs on **Featherless AI** — the hackathon's inference
+partner — using `Qwen/Qwen2.5-72B-Instruct` over an OpenAI-compatible endpoint.
+Anthropic is supported as an alternative and is selected automatically if its
+key is the only one present.
+
+**No provider is required.** With none configured, `deterministic_decide()`
+picks the top-scoring candidate that clears a fixed bar, and every risk gate
+downstream is identical. An API outage is a degradation, not an outage: HTTP
+errors, timeouts, empty responses and unparseable output all fall back to
+arithmetic with the cause recorded in the journal.
+
+The safety properties are **provider-independent by construction**. Whichever
+model answers, `validate()` checks the echoed legs against the shortlist
+character for character, the `contracts` field is discarded, and `risk.py`
+sizes the position. A test proves a hallucinated leg is rejected when
+Featherless answers, not only when Claude does.
+
+One implementation note worth recording: Claude has `RESPONSE_SCHEMA` enforced
+by the API, and Featherless has no equivalent. The first live call returned
+`{"decision": ..., "reason": ...}` with no legs and was correctly rejected. The
+required shape is now spelled out in the prompt on that path.
+
 ## 2b. Autonomy
 
 The agent runs itself on a **GitHub Actions schedule**, approximately every 30
@@ -170,7 +194,7 @@ not of whether the model answered.
 1 DTE, or **short-leg delta doubling** — an early warning that converts some
 max-losses into partial losses.
 
-**184 tests**, covering every gate that must never fail open: missing long leg,
+**199 tests**, covering every gate that must never fail open: missing long leg,
 long strike on the wrong side, tampered `max_loss`, flipped legs, and the model
 attempting to influence size.
 

@@ -132,7 +132,7 @@ notepad .env    # add your PAPER keys — never commit this file
 ALPACA_API_KEY=PK...          # paper keys start with PK
 ALPACA_SECRET_KEY=...
 ALPACA_PAPER_TRADE=true       # must stay true
-ANTHROPIC_API_KEY=sk-ant-...  # optional — see below
+FEATHERLESS_API_KEY=rc_...    # optional — see below
 ```
 
 ## Usage
@@ -163,7 +163,7 @@ ANTHROPIC_API_KEY=sk-ant-...  # optional — see below
 
 ### Running without an Anthropic key
 
-The agent is **fully functional with Alpaca alone**. With no `ANTHROPIC_API_KEY`,
+The agent is **fully functional with Alpaca alone**. With no LLM provider,
 with `--no-llm`, or if the Claude API errors mid-session, `brain.py` falls back
 to deterministic selection. Every risk gate is identical in both modes — the
 difference is judgement, not protection.

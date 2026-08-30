@@ -638,8 +638,37 @@ convention, and is unit-tested in `tests/test_adapt.py`.
 
 ## 8. Stage 4 — The brain
 
-`agent/brain.py`. Claude Sonnet 4.6, adaptive thinking, JSON-schema
-structured output.
+`agent/brain.py`. Two providers are supported and **neither is required**.
+
+| Provider | When it is used | Notes |
+|---|---|---|
+| **Featherless AI** | Default when `FEATHERLESS_API_KEY` is set | Hackathon partner. `Qwen/Qwen2.5-72B-Instruct` over an OpenAI-compatible endpoint |
+| **Anthropic** | Only if Featherless is absent | Claude Sonnet 4.6, adaptive thinking, JSON-schema structured output |
+| **Deterministic** | No key, `--no-llm`, or any failure | Top-scoring candidate clearing POP ≥ 0.60 and EV ≥ $2.00 |
+
+`BRAIN_PROVIDER` forces one explicitly. Every failure path — HTTP error,
+timeout, empty response, unparseable output — degrades to the deterministic
+selector with the cause written to the journal, so a dead key is a degradation
+rather than an outage.
+
+Two provider-specific details, both found the hard way on the first live call:
+
+- **Featherless sits behind Cloudflare**, which rejects the default
+  `Python-urllib/3.x` User-Agent with a 403 and Cloudflare error 1010. That is
+  a browser-signature ban, not an auth failure, but it reads exactly like a bad
+  key. The client identifies itself explicitly.
+- **Only Claude can have the schema enforced** by the API. Featherless has no
+  equivalent, and the first response came back as
+  `{"decision": ..., "reason": ...}` with no legs. `validate()` rejected it
+  correctly, but a judgement layer rejected every time is not one, so the
+  required JSON shape is spelled out in the prompt on that path.
+
+`scripts/check_llm.py` sends one synthetic shortlist through the real prompt
+and validator and reports which of three things happened: the call failed, the
+model answered but was rejected, or the model answered and validated. Worth
+running because a bad key fails **silently** in production — the agent falls
+back and keeps trading, so a broken key looks like a working agent until
+someone reads the journal.
 
 ### What the model sees
 
@@ -1171,7 +1200,7 @@ ever tighten.
 ## Appendix — reproducing every number here
 
 ```bash
-python -m pytest -q                  # 184 tests
+python -m pytest -q                  # 199 tests
 python -m scripts.run_screener       # live screen, read-only
 python -m agent.loop --force         # one dry-run cycle, market closed
 uvicorn dashboard.api:app --port 8000

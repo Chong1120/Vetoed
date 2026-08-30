@@ -55,7 +55,7 @@ Eighty six percent of that number was an artefact. I found it, I fixed it, and I
 
 <break time="1.0s" />
 
-The architecture is separation of powers. A deterministic screener decides what's valid. Claude decides what's attractive. And a deterministic risk module decides what's allowed, and can overrule the model at any confidence.
+The architecture is separation of powers. A deterministic screener decides what's valid. A language model decides what's attractive. And a deterministic risk module decides what's allowed, and can overrule the model at any confidence.
 
 The legs it sends back are checked against the real candidate, so a hallucinated contract is unexecutable. It returns a position size, and we throw it away.
 
@@ -83,7 +83,7 @@ That's exactly why the adaptive logic refuses to react to fewer than five closed
 
 <break time="1.0s" />
 
-Vetoed. Seventy seven tests. M.I.T. licensed. Running on Alpaca paper trading.
+Vetoed. A hundred and ninety nine tests. M.I.T. licensed. Running on Alpaca paper trading.
 
 An agent that's most useful when it says no.
 
@@ -117,7 +117,7 @@ Every decision is auditable. The screening funnel. The volatility on each underl
 
 <break time="0.7s" />
 
-Seventy seven tests. M.I.T. licensed. Alpaca paper trading. An agent that's most useful when it says no.
+A hundred and ninety nine tests. M.I.T. licensed. Alpaca paper trading. An agent that's most useful when it says no.
 ```
 
 ---
