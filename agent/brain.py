@@ -41,15 +41,29 @@ Your only job: given a pre-screened shortlist of defined-risk vertical CREDIT \
 SPREADS, decide whether to open exactly one of them, or none at all.
 
 Every candidate has already passed deterministic filters for liquidity, \
-defined risk, delta band, and expected value. You cannot propose a spread \
+defined risk, delta band, expected value, and a floor on measured \
+volatility risk premium. You cannot propose a spread \
 that is not on the list, and you cannot alter a spread's legs or strikes.
 
 How to think about it:
 - A credit spread profits when the underlying does NOT move past the short \
 strike. You are selling probability, not predicting direction.
-- `pop` is the delta-derived probability of profit. `ev` is the modelled \
-expected value in dollars per spread. Both are estimates from a single \
-quote snapshot, not guarantees.
+- `vrp_edge` is the most important number on each candidate. It is the \
+volatility risk premium in dollars: `ev` (this spread priced at 20-day \
+REALISED volatility) minus `ev_rn` (the same spread priced at the \
+market's IMPLIED volatility). Both run through one probability model, so \
+the only thing separating them is the volatility - which is what makes \
+the difference the premium being harvested rather than an artefact of \
+comparing two different formulas. Every candidate here has already \
+cleared $2.00 of it. Larger is better; one sitting near the floor is a \
+trade the market is barely paying us for.
+- `pop` is the REAL-WORLD probability of profit, computed from realised \
+volatility. `pop_rn` is its risk-neutral counterpart, computed from \
+implied volatility. `pop` exceeding `pop_rn` is that same edge expressed \
+as a probability rather than as dollars.
+- All of these are estimates from one quote snapshot, not guarantees. \
+Check `quote_feed`: `indicative` means derived quotes rather than true \
+NBBO, so treat the credit as approximate.
 - Prefer candidates whose short strike sits comfortably out of the money \
 relative to how much the underlying actually moves (compare atm_iv against \
 realized_vol_20d - iv_vs_rv above 1.0 means options are pricing more movement \
@@ -291,9 +305,13 @@ def build_prompt(shortlist: list[dict], context: dict,
             "max_profit": c["max_profit"],
             "max_loss": c["max_loss"],
             "pop": c["pop"],
+            "pop_rn": c["pop_rn"],
             "ev": c["ev"],
+            "ev_rn": c["ev_rn"],
+            "vrp_edge": c["vrp_edge"],
             "short_delta": c["short_delta"],
             "short_iv": c["short_iv"],
+            "realized_vol": c["realized_vol"],
             "distance_pct": c["distance_pct"],
             "open_interest": c["min_open_interest"],
         })
