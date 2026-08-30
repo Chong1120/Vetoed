@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS runs (
     day_pnl       REAL,
     halted        INTEGER DEFAULT 0,
     candidates    INTEGER DEFAULT 0,
-    note          TEXT
+    note          TEXT,
+    context_json  TEXT          -- per-underlying spot/IV/RV for the dashboard
 );
 
 CREATE TABLE IF NOT EXISTS decisions (
@@ -114,6 +115,7 @@ def connect(path: str = DB_PATH):
 MIGRATIONS = [
     "ALTER TABLE orders ADD COLUMN entry_short_delta REAL",
     "ALTER TABLE orders ADD COLUMN entry_dte INTEGER",
+    "ALTER TABLE runs ADD COLUMN context_json TEXT",
 ]
 
 
@@ -133,13 +135,21 @@ def init(path: str = DB_PATH) -> None:
 
 def start_run(market_open: bool, feed: str | None, equity: float | None,
               day_pnl: float | None, halted: bool, candidates: int,
-              note: str = "", path: str = DB_PATH) -> int:
+              note: str = "", context: dict | None = None,
+              path: str = DB_PATH) -> int:
+    """Open a run row.
+
+    `context` is the screener's own output - per-underlying spot, IV, realised
+    vol and contracts examined. Stored so the dashboard can show WHY a cycle
+    produced the candidates it did, including the cycles that produced none.
+    """
     with connect(path) as c:
         cur = c.execute(
             "INSERT INTO runs (ts, market_open, feed, equity, day_pnl, halted,"
-            " candidates, note) VALUES (?,?,?,?,?,?,?,?)",
+            " candidates, note, context_json) VALUES (?,?,?,?,?,?,?,?,?)",
             (now(), int(market_open), feed, equity, day_pnl, int(halted),
-             candidates, note))
+             candidates, note,
+             json.dumps(context.get("underlyings", {})) if context else None))
         return int(cur.lastrowid)
 
 

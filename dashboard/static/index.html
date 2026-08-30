@@ -3,190 +3,491 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vetoed</title>
+<title>Vetoed &middot; agent monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
   :root {
-    --bg: #0d1117; --panel: #161b22; --line: #30363d;
-    --text: #e6edf3; --muted: #8b949e;
-    --green: #3fb950; --red: #f85149; --blue: #58a6ff; --amber: #d29922;
+    --ground:   #0A0E13;
+    --panel:    #10161E;
+    --raised:   #161E28;
+    --line:     #212C38;
+    --line-soft:#1A232D;
+    --text:     #E6EDF3;
+    --text-dim: #A9B6C3;
+    --muted:    #75828F;
+    --accent:   #4DD4C0;
+    --accent-dk:#123832;
+    --profit:   #3ECF8E;
+    --profit-bg:#102A20;
+    --loss:     #F2685C;
+    --loss-bg:  #2C1512;
+    --warn:     #F0A93B;
+    --warn-bg:  #2C2010;
+
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    margin: 0; background: var(--ground); color: var(--text);
+    font-family: var(--sans); font-size: 14px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
   }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .pos { color: var(--profit); } .neg { color: var(--loss); }
+  .dim { color: var(--muted); }
+
+  /* ---------------- header ---------------- */
   header {
-    padding: 18px 24px; border-bottom: 1px solid var(--line);
-    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 20;
+    background: rgba(10,14,19,.92); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 26px;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
   }
-  h1 { font-size: 17px; margin: 0; letter-spacing: .5px; }
-  .sub { color: var(--muted); font-size: 12px; }
-  main { padding: 24px; max-width: 1200px; margin: 0 auto; }
-  .tiles { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
-  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
-  .tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
-  .tile .value { font-size: 23px; margin-top: 6px; }
-  .pos { color: var(--green); } .neg { color: var(--red); }
-  section { margin-top: 30px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
-       color: var(--muted); margin: 0 0 12px; font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; background: var(--panel);
-          border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line);
-           font-size: 12.5px; vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: 11px;
-       text-transform: uppercase; letter-spacing: .6px; }
-  tr:last-child td { border-bottom: none; }
-  .wrap { overflow-x: auto; }
-  .pill { display: inline-block; padding: 1px 8px; border-radius: 20px;
-          font-size: 11px; border: 1px solid; }
-  .ok { color: var(--green); border-color: var(--green); }
-  .no { color: var(--red); border-color: var(--red); }
-  .idle { color: var(--muted); border-color: var(--line); }
-  .rationale { color: var(--text); max-width: 520px; }
-  .veto { color: var(--red); font-size: 11.5px; margin-top: 4px; }
-  .reason { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
-  .caption { color: var(--muted); font-size: 11.5px; margin: -6px 0 12px;
-             max-width: 760px; line-height: 1.6; }
-  .edge { font-size: 14px; }
-  .flat { color: var(--amber); }
-  .empty { color: var(--muted); padding: 18px; text-align: center;
-           border: 1px dashed var(--line); border-radius: 8px; }
-  svg { display: block; width: 100%; height: 200px;
-        background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand h1 {
+    font-size: 16px; margin: 0; letter-spacing: .18em; font-weight: 700;
+  }
+  .brand .tag {
+    color: var(--muted); font-size: 11.5px; letter-spacing: .02em;
+  }
+  .status { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: .07em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 3px; border: 1px solid var(--line);
+    color: var(--muted); white-space: nowrap;
+  }
+  .pill.on   { color: var(--profit); border-color: var(--profit); background: var(--profit-bg); }
+  .pill.off  { color: var(--muted); }
+  .pill.alert{ color: var(--loss); border-color: var(--loss); background: var(--loss-bg); }
+  .pill.info { color: var(--accent); border-color: var(--accent); background: var(--accent-dk); }
+  .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--profit);
+    display: inline-block; margin-right: 6px; vertical-align: middle;
+  }
+  @keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .dot.live { animation: breathe 2.4s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .dot.live { animation: none } }
+
+  main { padding: 24px 26px 80px; max-width: 1340px; margin: 0 auto; }
+
+  /* ---------------- kpis ---------------- */
+  .kpis {
+    display: grid; gap: 1px; background: var(--line-soft);
+    grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+    border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  }
+  .kpi { background: var(--panel); padding: 15px 17px; }
+  .kpi .k {
+    font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .kpi .v {
+    font-family: var(--mono); font-size: 22px; font-weight: 600;
+    margin-top: 6px; letter-spacing: -.02em; line-height: 1.2;
+  }
+  .kpi .s { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+
+  /* ---------------- layout ---------------- */
+  section { margin-top: 26px; }
+  .grid2 { display: grid; gap: 18px; grid-template-columns: 1.55fr 1fr; }
+  @media (max-width: 940px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; overflow: hidden;
+  }
+  .card > h2 {
+    font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; margin: 0;
+    padding: 13px 17px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .card > h2 .hint {
+    margin-left: auto; text-transform: none; letter-spacing: 0;
+    font-size: 11px; color: var(--muted); font-weight: 400;
+  }
+  .card .body { padding: 17px; }
+
+  /* ---------------- chart ---------------- */
+  svg.chart { display: block; width: 100%; height: 232px; }
+  .grid-line { stroke: var(--line-soft); stroke-width: 1; }
+  .base-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: .55; }
+  .axis-text { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
+
+  /* ---------------- funnel ---------------- */
+  .funnel { display: grid; gap: 11px; }
+  .fn-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+  .fn-label { font-size: 12.5px; color: var(--text-dim); }
+  .fn-label small { display: block; color: var(--muted); font-size: 11px; }
+  .fn-val { font-family: var(--mono); font-size: 17px; font-weight: 600; }
+  .fn-bar { grid-column: 1 / -1; height: 5px; background: var(--raised); border-radius: 3px; overflow: hidden; }
+  .fn-fill { height: 100%; border-radius: 3px; background: var(--accent); }
+  .fn-fill.cut { background: var(--warn); }
+  .fn-fill.done { background: var(--profit); }
+
+  /* ---------------- vol cards ---------------- */
+  .vols { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(184px, 1fr)); }
+  .vol { background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+  .vol .sym { font-family: var(--mono); font-weight: 700; font-size: 13.5px; letter-spacing: .04em; }
+  .vol .ratio { font-family: var(--mono); font-size: 19px; font-weight: 600; margin-top: 4px; }
+  .vol .meta { font-size: 11px; color: var(--muted); margin-top: 3px; font-family: var(--mono); }
+  .vol .track { height: 4px; background: var(--ground); border-radius: 2px; margin-top: 9px; position: relative; overflow: hidden; }
+  .vol .val { height: 100%; border-radius: 2px; }
+  .vol .mark { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--muted); }
+  .vol .verdict { font-size: 11px; margin-top: 7px; font-weight: 600; }
+
+  /* ---------------- tables ---------------- */
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.8px; }
+  th {
+    text-align: left; font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); background: var(--raised); white-space: nowrap;
+  }
+  td { padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--raised); }
+  td.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  .edge-v { font-family: var(--mono); font-size: 14.5px; font-weight: 600; }
+  .sub { font-size: 11px; color: var(--muted); margin-top: 3px; font-family: var(--mono); }
+  .rationale { max-width: 430px; color: var(--text-dim); font-size: 12.3px; }
+  .veto {
+    color: var(--loss); font-size: 11.5px; margin-top: 5px;
+    padding-left: 9px; border-left: 2px solid var(--loss);
+  }
+  .note { color: var(--muted); font-size: 11.5px; margin-top: 5px; }
+
+  .empty {
+    color: var(--muted); padding: 30px 20px; text-align: center; font-size: 13px;
+  }
+  .empty strong { color: var(--text-dim); display: block; margin-bottom: 5px; font-weight: 600; }
+
+  .legend { font-size: 11.5px; color: var(--muted); padding: 11px 17px; border-top: 1px solid var(--line); }
+  .legend b { color: var(--text-dim); font-weight: 600; }
+
+  footer { color: var(--muted); font-size: 11.5px; margin-top: 30px; text-align: center; }
 </style>
 </head>
 <body>
+
 <header>
-  <h1>VETOED</h1>
-  <span class="sub">the AI proposes &middot; deterministic risk gates dispose &middot; every decision logged</span>
+  <div class="brand">
+    <h1>VETOED</h1>
+    <span class="tag">the AI proposes &middot; deterministic risk gates dispose &middot; every decision logged</span>
+  </div>
+  <div class="status" id="status"></div>
 </header>
 
 <main>
-  <div class="tiles" id="tiles"></div>
+  <div class="kpis" id="kpis"></div>
 
-  <section>
-    <h2>Equity curve</h2>
-    <svg id="chart" viewBox="0 0 800 200" preserveAspectRatio="none"></svg>
+  <section class="grid2">
+    <div class="card">
+      <h2>Equity curve <span class="hint" id="chart-hint"></span></h2>
+      <div class="body"><svg class="chart" id="chart" preserveAspectRatio="none"></svg></div>
+    </div>
+
+    <div class="card">
+      <h2>Screening funnel <span class="hint">latest cycle</span></h2>
+      <div class="body"><div class="funnel" id="funnel"></div></div>
+      <div class="legend">Candidates must clear <b>$2.00</b> of measured volatility
+        risk premium. Spreads the market is not paying for are cut here.</div>
+    </div>
   </section>
 
-  <section>
+  <section class="card">
+    <h2>Volatility by underlying <span class="hint">implied vs realised &mdash; where the premium is</span></h2>
+    <div class="body"><div class="vols" id="vols"></div></div>
+  </section>
+
+  <section class="card">
     <h2>Open positions</h2>
-    <div class="wrap" id="positions"></div>
+    <div class="scroll" id="positions"></div>
   </section>
 
-  <section>
-    <h2>Decisions &mdash; including the ones risk vetoed</h2>
-    <p class="caption">Edge = <b>vrp_edge</b>: the same spread priced at realised
-    volatility minus the same spread priced at the market's implied volatility.
-    Both sides use one model, so the only difference is the vol &mdash; the
-    number is the volatility risk premium being harvested, in dollars.
-    Near zero means the market is not paying us to take the risk.</p>
-    <div class="wrap" id="decisions"></div>
+  <section class="card">
+    <h2>Decisions <span class="hint">including every one the risk gates vetoed</span></h2>
+    <div class="scroll" id="decisions"></div>
+    <div class="legend"><b>Edge</b> = the same spread priced at realised volatility
+      minus the same spread priced at the market's implied volatility. One model
+      both sides, so the only difference is the vol &mdash; the number is the
+      premium being harvested, in dollars. Near zero means nobody is paying us.</div>
   </section>
+
+  <footer>Read-only view. This page cannot place, cancel, or modify an order.</footer>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
-const money = v => v == null ? "&mdash;" :
-  (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-const cls = v => v == null ? "" : (v > 0 ? "pos" : v < 0 ? "neg" : "");
+const NB = "&mdash;";
+
+const money = (v, dp = 2) => v == null ? NB :
+  (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString(undefined,
+    {minimumFractionDigits: dp, maximumFractionDigits: dp});
+const signed = v => v == null ? NB : (v >= 0 ? "+" : "−") + "$" +
+  Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const pct = v => v == null ? NB : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2) + "%";
+const cls = v => v == null || v === 0 ? "" : (v > 0 ? "pos" : "neg");
+const esc = s => String(s ?? "").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+const shortTs = t => String(t || "").replace("T", " ").replace("+00:00", "").slice(0, 16);
 
 async function get(url) { const r = await fetch(url); return r.json(); }
 
-function tiles(s) {
-  const items = [
-    ["Equity", money(s.equity_latest), ""],
-    ["Change", money(s.equity_change), cls(s.equity_change)],
-    ["Realised P&amp;L", money(s.realised_pnl), cls(s.realised_pnl)],
-    ["Open positions", s.open_positions ?? 0, ""],
-    ["Capital at risk", money(s.open_risk), ""],
-    ["Orders filled", (s.orders_filled ?? 0) + " / " + (s.orders_total ?? 0), ""],
-  ];
-  $("tiles").innerHTML = items.map(([l, v, c]) =>
-    `<div class="tile"><div class="label">${l}</div><div class="value ${c}">${v}</div></div>`).join("");
+/* ------------------------------------------------------------------ */
+function status(summary, runs) {
+  const run = summary.last_run || runs[0] || null;
+  const feed = run?.feed || "unknown";
+  const bits = [];
+  bits.push(`<span class="pill info">${esc(feed)} feed</span>`);
+  if (run) {
+    bits.push(`<span class="pill ${run.market_open ? "on" : "off"}">`
+      + `<span class="dot ${run.market_open ? "live" : ""}" `
+      + `style="background:${run.market_open ? "var(--profit)" : "var(--muted)"}"></span>`
+      + `market ${run.market_open ? "open" : "closed"}</span>`);
+    if (run.halted) bits.push(`<span class="pill alert">session halted</span>`);
+    bits.push(`<span class="pill">last run ${esc(shortTs(run.ts))} UTC</span>`);
+  } else {
+    bits.push(`<span class="pill">no runs yet</span>`);
+  }
+  $("status").innerHTML = bits.join("");
 }
 
+/* ------------------------------------------------------------------ */
+function kpis(s, orders) {
+  const start = s.equity_start, latest = s.equity_latest;
+  const chg = s.equity_change;
+  const chgPct = (start && chg != null && start !== 0) ? (chg / start) * 100 : null;
+
+  const closed = orders.filter(o => o.realised_pnl != null);
+  const wins = closed.filter(o => Number(o.realised_pnl) > 0).length;
+  const wr = closed.length ? (wins / closed.length) * 100 : null;
+
+  const riskPct = (latest && s.open_risk) ? (s.open_risk / latest) * 100 : 0;
+
+  const items = [
+    ["Equity", latest == null ? NB : money(latest), "",
+     start == null ? "" : "started " + money(start)],
+    ["Total P&amp;L", chg == null ? NB : signed(chg), cls(chg),
+     chgPct == null ? "" : pct(chgPct) + " on starting equity"],
+    ["Realised P&amp;L", signed(s.realised_pnl || 0), cls(s.realised_pnl),
+     closed.length + " closed trade" + (closed.length === 1 ? "" : "s")],
+    ["Win rate", wr == null ? NB : wr.toFixed(0) + "%", wr == null ? "" : (wr >= 80 ? "pos" : "neg"),
+     closed.length ? `${wins} of ${closed.length}` : "needs closed trades"],
+    ["Open positions", String(s.open_positions ?? 0), "",
+     "limit 5 concurrent"],
+    ["Capital at risk", money(s.open_risk || 0), "",
+     riskPct ? riskPct.toFixed(1) + "% of equity (cap 25%)" : "cap 25% of equity"],
+  ];
+  $("kpis").innerHTML = items.map(([k, v, c, sub]) =>
+    `<div class="kpi"><div class="k">${k}</div>`
+    + `<div class="v ${c}">${v}</div>`
+    + `<div class="s">${sub}</div></div>`).join("");
+}
+
+/* ------------------------------------------------------------------ */
 function chart(rows) {
   const svg = $("chart");
-  if (!rows.length) { svg.innerHTML = `<text x="400" y="100" fill="#8b949e" text-anchor="middle" font-size="12">no equity snapshots yet</text>`; return; }
-  const vals = rows.map(r => r.equity);
-  const lo = Math.min(...vals), hi = Math.max(...vals);
-  const pad = (hi - lo) * 0.1 || 100;
-  const min = lo - pad, max = hi + pad;
-  const x = i => rows.length === 1 ? 400 : (i / (rows.length - 1)) * 780 + 10;
-  const y = v => 190 - ((v - min) / (max - min)) * 180;
-  const pts = rows.map((r, i) => `${x(i)},${y(r.equity)}`).join(" ");
-  const first = vals[0], last = vals[vals.length - 1];
-  const colour = last >= first ? "#3fb950" : "#f85149";
-  svg.innerHTML =
-    `<polyline fill="none" stroke="${colour}" stroke-width="2" points="${pts}"/>` +
-    `<line x1="10" y1="${y(first)}" x2="790" y2="${y(first)}" stroke="#30363d" stroke-dasharray="4 4"/>`;
+  if (!rows.length) {
+    $("chart-hint").textContent = "";
+    svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle" class="axis-text"
+      style="font-size:12px">No equity snapshots yet &mdash; run the agent</text>`;
+    return;
+  }
+  const W = 800, H = 232, L = 62, R = 14, T = 16, B = 26;
+  const vals = rows.map(r => Number(r.equity));
+  const base = vals[0], last = vals[vals.length - 1];
+  let lo = Math.min(...vals, base), hi = Math.max(...vals, base);
+  if (hi === lo) { lo -= Math.max(lo * 0.001, 1); hi += Math.max(hi * 0.001, 1); }
+  const padY = (hi - lo) * 0.15; lo -= padY; hi += padY;
+
+  const x = i => L + (rows.length === 1 ? (W - L - R) / 2
+                    : i * (W - L - R) / (rows.length - 1));
+  const y = v => T + (hi - v) * (H - T - B) / (hi - lo);
+  const up = last >= base;
+  const stroke = up ? "var(--profit)" : "var(--loss)";
+
+  const pts = rows.map((r, i) => `${x(i).toFixed(1)},${y(vals[i]).toFixed(1)}`).join(" ");
+  const area = `${L},${y(lo)} ` + pts + ` ${x(rows.length - 1)},${y(lo)}`;
+
+  const ticks = 4;
+  let gridline = "", labels = "";
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + (hi - lo) * i / ticks, yy = y(v);
+    gridline += `<line class="grid-line" x1="${L}" y1="${yy}" x2="${W - R}" y2="${yy}"/>`;
+    labels += `<text class="axis-text" x="${L - 8}" y="${yy + 3.5}" text-anchor="end">`
+            + `${Math.round(v).toLocaleString()}</text>`;
+  }
+  const first = shortTs(rows[0].ts).slice(0, 10);
+  const lastT = shortTs(rows[rows.length - 1].ts).slice(0, 10);
+
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = `
+    <defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${up ? "#3ECF8E" : "#F2685C"}" stop-opacity=".22"/>
+      <stop offset="100%" stop-color="${up ? "#3ECF8E" : "#F2685C"}" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${gridline}${labels}
+    <polygon points="${area}" fill="url(#fill)"/>
+    <line class="base-line" x1="${L}" y1="${y(base)}" x2="${W - R}" y2="${y(base)}"/>
+    <text class="axis-text" x="${W - R}" y="${y(base) - 5}" text-anchor="end">start</text>
+    <polyline fill="none" stroke="${stroke}" stroke-width="2"
+              stroke-linejoin="round" points="${pts}"/>
+    <circle cx="${x(rows.length - 1)}" cy="${y(last)}" r="3.5" fill="${stroke}"/>
+    <text class="axis-text" x="${L}" y="${H - 8}">${first}</text>
+    <text class="axis-text" x="${W - R}" y="${H - 8}" text-anchor="end">${lastT}</text>`;
+  $("chart-hint").innerHTML = `${rows.length} snapshot${rows.length === 1 ? "" : "s"}`;
 }
 
+/* ------------------------------------------------------------------ */
+function funnel(runs, decisions, orders) {
+  const run = runs[0];
+  if (!run) { $("funnel").innerHTML = `<div class="empty">No cycles run yet.</div>`; return; }
+
+  const shortlisted = Number(run.candidates || 0);
+  const runDecisions = decisions.filter(d => d.run_id === run.id);
+  const wanted = runDecisions.filter(d => d.llm_action === "open_spread").length;
+  const approved = runDecisions.filter(d => d.risk_approved).length;
+  const decisionIds = new Set(runDecisions.map(d => d.id));
+  const placed = orders.filter(o => decisionIds.has(o.decision_id)).length;
+
+  const rows = [
+    ["Cleared the edge gate", "spreads with &ge; $2.00 measured premium", shortlisted, ""],
+    ["Selected to trade", "the brain picked one, or passed", wanted, "cut"],
+    ["Approved by risk", "survived all eight hard gates", approved, "cut"],
+    ["Sent to broker", "atomic multi-leg orders", placed, "done"],
+  ];
+  const max = Math.max(shortlisted, 1);
+  $("funnel").innerHTML = rows.map(([label, sub, val, kind]) => `
+    <div class="fn-row">
+      <div class="fn-label">${label}<small>${sub}</small></div>
+      <div class="fn-val">${val}</div>
+      <div class="fn-bar"><div class="fn-fill ${kind}"
+        style="width:${Math.max((val / max) * 100, val > 0 ? 4 : 0)}%"></div></div>
+    </div>`).join("");
+}
+
+/* ------------------------------------------------------------------ */
+function vols(runs) {
+  const run = runs.find(r => r.context_json && Object.keys(r.context_json).length);
+  if (!run) {
+    $("vols").innerHTML = `<div class="empty"><strong>No screening context recorded yet</strong>
+      Run a cycle to capture implied vs realised volatility per underlying.</div>`;
+    return;
+  }
+  const entries = Object.entries(run.context_json);
+  $("vols").innerHTML = entries.map(([sym, d]) => {
+    if (d.error) return `<div class="vol"><div class="sym">${esc(sym)}</div>
+      <div class="meta neg">${esc(d.error).slice(0, 60)}</div></div>`;
+    const r = d.iv_vs_rv;
+    const paying = r != null && r >= 1.10;
+    const thin = r != null && r <= 0.95;
+    const col = paying ? "var(--profit)" : thin ? "var(--loss)" : "var(--warn)";
+    // Track spans 0.80 - 1.40; the tick marks parity at 1.00.
+    const w = r == null ? 0 : Math.max(2, Math.min(100, ((r - 0.80) / 0.60) * 100));
+    const parity = ((1.00 - 0.80) / 0.60) * 100;
+    return `<div class="vol">
+      <div class="sym">${esc(sym)}</div>
+      <div class="ratio" style="color:${col}">${r == null ? NB : r.toFixed(3)}</div>
+      <div class="meta">IV ${d.atm_iv == null ? NB : (d.atm_iv * 100).toFixed(1) + "%"}
+        vs RV ${d.realized_vol_20d == null ? NB : (d.realized_vol_20d * 100).toFixed(1) + "%"}</div>
+      <div class="track">
+        <div class="val" style="width:${w}%;background:${col}"></div>
+        <div class="mark" style="left:${parity}%"></div>
+      </div>
+      <div class="verdict" style="color:${col}">${
+        paying ? "premium is rich" : thin ? "not paying — sits out" : "neutral"}</div>
+      <div class="meta">spot ${d.spot == null ? NB : "$" + Number(d.spot).toFixed(2)}
+        &middot; ${d.above_trend ? "above" : "below"} 20d</div>
+    </div>`;
+  }).join("");
+}
+
+/* ------------------------------------------------------------------ */
 function positions(rows) {
-  if (!rows.length) { $("positions").innerHTML = `<div class="empty">No open positions.</div>`; return; }
+  if (!rows.length) {
+    $("positions").innerHTML = `<div class="empty"><strong>No open positions</strong>
+      Filled spreads appear here with their capped downside.</div>`;
+    return;
+  }
   $("positions").innerHTML = `<table><thead><tr>
-    <th>Underlying</th><th>Kind</th><th>Short</th><th>Long</th>
-    <th>Qty</th><th>Credit</th><th>Max loss</th><th>Status</th></tr></thead><tbody>` +
-    rows.map(r => `<tr>
-      <td>${r.underlying ?? ""}</td><td>${r.kind ?? ""}</td>
-      <td>${r.short_symbol ?? ""}</td><td>${r.long_symbol ?? ""}</td>
-      <td>${r.contracts ?? ""}</td><td>${money(r.credit)}</td>
-      <td>${money(r.max_loss_total)}</td><td>${r.status ?? ""}</td></tr>`).join("") +
-    `</tbody></table>`;
+    <th>Underlying</th><th>Structure</th><th>Short leg</th><th>Long leg</th>
+    <th>Qty</th><th>Credit</th><th>Max loss</th><th>Status</th></tr></thead><tbody>`
+    + rows.map(r => `<tr>
+      <td class="mono">${esc(r.underlying)}</td>
+      <td>${esc(r.kind)}</td>
+      <td class="mono dim">${esc(r.short_symbol)}</td>
+      <td class="mono dim">${esc(r.long_symbol)}</td>
+      <td class="mono">${r.contracts ?? NB}</td>
+      <td class="mono">${money(r.credit)}</td>
+      <td class="mono neg">${money(r.max_loss_total)}</td>
+      <td class="mono">${esc(r.status)}</td></tr>`).join("")
+    + `</tbody></table>`;
 }
 
+/* ------------------------------------------------------------------ */
 function edgeCell(c) {
-  if (c.vrp_edge == null) return "&mdash;";
+  if (c.vrp_edge == null) return NB;
   const v = Number(c.vrp_edge);
-  // Below ~$1 the "premium" is inside the noise of a 20-day vol estimate.
-  const cls = v >= 1 ? "pos" : (v <= -1 ? "neg" : "flat");
+  // Under ~$1 the "premium" is inside the noise of a 20-day vol estimate.
+  const col = v >= 2 ? "var(--profit)" : v <= -1 ? "var(--loss)" : "var(--warn)";
   const ivrv = (c.short_iv && c.realized_vol)
-    ? ` &middot; IV ${(c.short_iv * 100).toFixed(1)}% vs RV ${(c.realized_vol * 100).toFixed(1)}%`
-    : "";
-  return `<span class="edge ${cls}">${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(2)}</span>`
-    + `<div class="reason">real $${Number(c.ev).toFixed(2)} &minus; risk-neutral `
-    + `$${Number(c.ev_rn).toFixed(2)}${ivrv}</div>`;
+    ? `IV ${(c.short_iv * 100).toFixed(1)}% vs RV ${(c.realized_vol * 100).toFixed(1)}%` : "";
+  return `<div class="edge-v" style="color:${col}">${signed(v)}</div>`
+    + `<div class="sub">real ${money(c.ev)} &minus; r-n ${money(c.ev_rn)}</div>`
+    + (ivrv ? `<div class="sub">${ivrv}</div>` : "");
 }
 
 function decisions(rows) {
-  if (!rows.length) { $("decisions").innerHTML = `<div class="empty">No decisions recorded yet. Run the agent.</div>`; return; }
+  if (!rows.length) {
+    $("decisions").innerHTML = `<div class="empty"><strong>No decisions recorded yet</strong>
+      Run <span class="num">python -m agent.loop</span> to start a cycle.</div>`;
+    return;
+  }
   $("decisions").innerHTML = `<table><thead><tr>
-    <th>Time (UTC)</th><th>Action</th><th>Candidate</th><th>Edge</th><th>Conf.</th>
-    <th>Risk</th><th>Reasoning</th></tr></thead><tbody>` +
-    rows.map(d => {
+    <th>Time (UTC)</th><th>Candidate</th><th>Edge</th><th>Action</th>
+    <th>Conf.</th><th>Risk</th><th>Reasoning</th></tr></thead><tbody>`
+    + rows.map(d => {
       const c = d.candidate_json || {};
       const vetoes = d.risk_vetoes || [];
       const reasons = d.risk_reasons || [];
       const gate = d.risk_approved
-        ? `<span class="pill ok">approved &times;${d.risk_contracts}</span>`
-        : (vetoes.length ? `<span class="pill no">vetoed</span>`
-                         : `<span class="pill idle">n/a</span>`);
+        ? `<span class="pill on">approved &times;${d.risk_contracts}</span>`
+        : (vetoes.length ? `<span class="pill alert">vetoed</span>`
+                         : `<span class="pill off">n/a</span>`);
       const spread = c.short_symbol
-        ? `${c.underlying} ${c.kind}<br><span class="reason">${c.short_strike}/${c.long_strike} &middot; ${c.dte}DTE &middot; POP ${c.pop}</span>`
-        : "&mdash;";
+        ? `<div class="mono">${esc(c.underlying)} ${esc(c.kind)}</div>
+           <div class="sub">${c.short_strike}/${c.long_strike} &middot; ${c.dte}DTE
+           &middot; POP ${c.pop} &middot; ${money(c.credit)} credit</div>`
+        : `<span class="dim">${NB}</span>`;
       return `<tr>
-        <td>${(d.ts || "").replace("T", " ").replace("+00:00", "")}</td>
-        <td>${d.llm_action ?? "&mdash;"}</td>
+        <td class="mono dim">${esc(shortTs(d.ts))}</td>
         <td>${spread}</td>
         <td>${edgeCell(c)}</td>
-        <td>${d.llm_confidence == null ? "&mdash;" : Number(d.llm_confidence).toFixed(2)}</td>
+        <td class="mono">${esc(d.llm_action || NB)}</td>
+        <td class="mono">${d.llm_confidence == null ? NB : Number(d.llm_confidence).toFixed(2)}</td>
         <td>${gate}</td>
-        <td class="rationale">${(d.llm_rationale || "").replace(/</g, "&lt;")}
-          ${vetoes.map(v => `<div class="veto">VETO: ${v}</div>`).join("")}
-          ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="reason">${r}</div>`).join("") : ""}
-          ${d.llm_error ? `<div class="veto">${d.llm_error}</div>` : ""}
+        <td class="rationale">${esc(d.llm_rationale)}
+          ${vetoes.map(v => `<div class="veto">${esc(v)}</div>`).join("")}
+          ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="note">${esc(r)}</div>`).join("") : ""}
+          ${d.llm_error ? `<div class="veto">${esc(d.llm_error)}</div>` : ""}
         </td></tr>`;
     }).join("") + `</tbody></table>`;
 }
 
+/* ------------------------------------------------------------------ */
 async function refresh() {
   try {
-    const [s, e, p, d] = await Promise.all([
-      get("/api/summary"), get("/api/equity"),
-      get("/api/positions"), get("/api/decisions?limit=60")]);
-    tiles(s); chart(e); positions(p); decisions(d);
+    const [s, e, p, d, r, o] = await Promise.all([
+      get("/api/summary"), get("/api/equity"), get("/api/positions"),
+      get("/api/decisions?limit=60"), get("/api/runs?limit=30"), get("/api/orders?limit=200")]);
+    status(s, r); kpis(s, o); chart(e); funnel(r, d, o);
+    vols(r); positions(p); decisions(d);
   } catch (err) { console.error(err); }
 }
 refresh();

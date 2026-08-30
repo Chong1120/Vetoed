@@ -88,7 +88,15 @@ def positions() -> JSONResponse:
 @app.get("/api/runs")
 def runs(limit: int = 50) -> JSONResponse:
     journal.init()
-    return JSONResponse(journal.recent_runs(limit))
+    out = []
+    for r in journal.recent_runs(limit):
+        r = dict(r)
+        try:
+            r["context_json"] = json.loads(r.get("context_json") or "null")
+        except (json.JSONDecodeError, TypeError):
+            r["context_json"] = None
+        out.append(r)
+    return JSONResponse(out)
 
 
 @app.get("/")

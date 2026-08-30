@@ -23,6 +23,10 @@ __pycache__/
 *.db-shm
 journal/*
 !journal/.gitkeep
+# The decision journal IS the demo - it is what the deployed dashboard
+# renders and what judges inspect. Checked before committing: it holds no
+# keys, no Alpaca account id, and no order ids. Paper trading only.
+!journal/trades.db
 
 # --- Editor / OS ---
 .vscode/

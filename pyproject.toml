@@ -3,10 +3,31 @@ name = "vetoed"
 version = "0.1.0"
 description = "Vetoed - an autonomous options agent where the AI is the least-trusted component"
 requires-python = ">=3.11"
+
+# Lower bounds are the versions this was actually built and tested against
+# (see docs/how-it-works.md). Not pinned exactly, so a fresh install can pick
+# up patch fixes.
 dependencies = [
-    "alpaca-py>=0.33.0",
-    "python-dotenv>=1.0.1",
+    "alpaca-py>=0.44.0",        # market data + trading REST (screening path)
+    "python-dotenv>=1.2.3",     # .env loading, used by every entry point
+    "anthropic>=1.2.0",         # brain.py - falls back to deterministic if absent
+    "mcp>=1.29.1",              # stdio client for Alpaca's MCP server
+    "alpaca-mcp-server>=2.3.0", # the server itself; executor spawns it
+    "apscheduler>=3.11.3",      # loop.py --schedule
 ]
+
+[project.optional-dependencies]
+# The read-only journal dashboard. Split out so the trading agent can be
+# installed without a web stack, and so the deployed dashboard image does not
+# need the trading dependencies.
+dashboard = [
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.52.4",
+]
+dev = [
+    "pytest>=9.1.1",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
