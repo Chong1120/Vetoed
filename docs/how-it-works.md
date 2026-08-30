@@ -41,12 +41,20 @@ figure in it is reproducible with `python -m scripts.run_screener`.
 | `python -m agent.loop --live` | One cycle, orders actually submitted. |
 | `python -m agent.loop --force` | Run even when the market is closed. |
 | `python -m agent.loop --no-llm` | Skip Claude, use deterministic selection. |
-| `python -m agent.loop --schedule` | Continuous. Weekdays 10:00–15:30 ET, every 30 minutes. |
+| `python -m agent.loop --schedule` | Continuous on an internal timer. `POLL_INTERVAL_MINUTES` sets the interval, default 30. |
 | `uvicorn dashboard.api:app --port 8000` | Read-only dashboard over the journal. |
 
 Dry run is the default everywhere. `--live` is the only way an order reaches
-Alpaca, and `ALPACA_PAPER_TRADE=true` is asserted at three separate entry
-points — `data.load_keys()`, `executor._child_env()`, and `check_setup.py`.
+Alpaca, and `ALPACA_PAPER_TRADE=true` is asserted at four separate entry
+points — `loop.assert_paper_trading()` (before any network call),
+`data.load_keys()`, `executor._child_env()`, and `check_setup.py`. None are
+overridable, and no live-capital path exists.
+
+**In production the agent runs itself** on a GitHub Actions schedule,
+approximately every 30 minutes during the US market session. Each tick is a
+fresh container running one cycle — which is a cold start every time, and safe
+because the risk gates are fed broker state rather than the local journal. See
+[deploy.md](deploy.md) for the idempotency design.
 
 ---
 

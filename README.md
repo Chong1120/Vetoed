@@ -170,180 +170,110 @@ difference is judgement, not protection.
 
 ## Running Vetoed Unattended
 
-Vetoed is built to run on a small Linux VPS so the agent does not depend on a
-laptop being awake. It is **Alpaca paper trading only** — there is no
-live-capital mode, and the process refuses to start without
-`ALPACA_PAPER_TRADE=true`.
+Vetoed runs itself on **GitHub Actions**. No server, no cost, nothing to keep
+powered on. It is **Alpaca paper trading only** — there is no live-capital
+mode, and the workflow refuses to run without `ALPACA_PAPER_TRADE=true`.
 
-> **Vetoed is not a 24-hour trading process.** It stays online continuously,
-> but it only evaluates candidates and opens trades during the configured US
-> market session. Outside those hours every cycle exits immediately after
-> checking Alpaca's clock.
+> **Vetoed is not a 24-hour process, and does not need to be.** Each tick is a
+> fresh container that runs one cycle and exits. It evaluates candidates and
+> opens trades only during the US market session; ticks outside it exit in
+> about a second having done nothing.
 
-### 1. VPS requirements
+### How it stays honest without a server
 
-Ubuntu 22.04 or 24.04, 1 vCPU, 1 GB RAM, ~2 GB disk. The agent is
-network-bound, not compute-bound — a screen takes about 20 seconds and is
-mostly waiting on Alpaca. Any $5/month instance is enough.
+Every run starts with an empty machine and a journal checked out from git —
+which is a stale-state restart by definition. That is exactly what
+[`agent/reconcile.py`](agent/reconcile.py) was built for:
 
-### 2. Install
+- **The broker is authoritative.** Risk gates are fed positions and open orders
+  read from Alpaca, never from the journal.
+- **Deterministic `client_order_id`.** Derived from the trade intent and the
+  date, so a re-run cannot fill the same spread twice — Alpaca rejects the
+  duplicate id.
+- **`concurrency` group.** GitHub will not start a second cycle while one is
+  in flight, with `cancel-in-progress: false` so a cycle is never killed
+  mid-submission.
 
-```bash
-git clone https://github.com/Chong1120/Vetoed.git
-cd Vetoed
-sudo bash deploy/install.sh
-```
+### 1. Add repository secrets
 
-That creates a `vetoed` system user, installs to `/opt/vetoed`, builds a
-virtualenv, installs both systemd units, and runs the test suite. **It does not
-start the agent** — starting a trading process as a side effect of an install
-script would be the wrong default.
+**Settings → Secrets and variables → Actions → New repository secret**
 
-### 3. Configure
-
-```bash
-sudo -u vetoed nano /opt/vetoed/.env
-```
-
-| Variable | Required | Notes |
+| Secret | Required | Notes |
 |---|---|---|
 | `ALPACA_API_KEY` | yes | Paper key, starts `PK` |
 | `ALPACA_SECRET_KEY` | yes | |
-| `ALPACA_PAPER_TRADE` | **yes** | Must be exactly `true` or the process exits |
-| `ANTHROPIC_API_KEY` | no | Absent → deterministic selection, agent still runs |
-| `POLL_INTERVAL_MINUTES` | no | Default `30`. Range 1–240 |
+| `ALPACA_PAPER_TRADE` | **yes** | Must be exactly `true` or the workflow fails |
+| `ANTHROPIC_API_KEY` | no | Absent → deterministic selection, agent still trades |
 
-Secrets live only in `/opt/vetoed/.env`, mode `600`, owned by `vetoed`. They
-are **not** in the systemd unit, which is world-readable. `.env` is gitignored
-and has never been committed.
+GitHub encrypts secrets and masks them in logs automatically.
 
-### 4. Paper-trading requirement
+### 2. Enable the workflow
 
-Enforced in four places, and none of them are overridable:
+**Actions → Vetoed agent → Enable workflow.** From then on it fires on its own.
 
-| Where | What happens |
+### 3. Prove it works without waiting for a tick
+
+**Actions → Vetoed agent → Run workflow.** It defaults to **dry-run**, which
+journals a full decision but submits nothing — safe to click, and the fastest
+way to demo autonomy.
+
+Set `force: true` to run against a closed market (dry-run only; the workflow
+will not combine `--force` with `--live`).
+
+### 4. Schedule
+
+```
+cron: "*/30 13-21 * * 1-5"      # UTC, Mon–Fri
+```
+
+Approximately every 30 minutes. The window is deliberately wide — 13:00–21:00
+UTC covers the US session under both EDT and EST, so no daylight-saving change
+can silently stop it.
+
+The window is only a coarse filter. **Alpaca's own clock is checked at the top
+of every cycle and is authoritative**, because it knows holidays and early
+closes that no cron expression does.
+
+### 5. Watch it
+
+| | |
 |---|---|
-| `loop.assert_paper_trading()` | Process exits before any network call |
-| `data.load_keys()` | Raises before market data is fetched |
-| `executor._child_env()` | Raises before the MCP server is spawned |
-| `scripts/check_setup.py` | Aborts the connectivity test |
+| Runs and logs | **Actions → Vetoed agent** |
+| Per-cycle summary | Click any run — equity, open positions, last outcome |
+| Decisions and P&L | <https://chong1120.github.io/Vetoed/> |
+| Raw state | `journal/health.json`, committed after each cycle |
 
-There is no flag, environment variable, or code path that enables live capital.
+The agent commits `journal/trades.db` back after every cycle, which also
+triggers the Pages rebuild — so the public dashboard updates itself.
 
-### 5. Start
+### 6. Stop it
 
-```bash
-# Prove one cycle works first — dry run, submits nothing
-cd /opt/vetoed
-sudo -u vetoed .venv/bin/python -m agent.loop --force
-
-# Then run it for real (paper account)
-sudo systemctl enable --now vetoed
-```
-
-`enable` registers it for boot; `--now` starts it immediately.
-
-### 6. Check status
-
-```bash
-systemctl status vetoed
-```
-
-Look for `Active: active (running)` and the startup banner showing the poll
-interval and mode.
-
-### 7. View logs
-
-```bash
-journalctl -u vetoed -f                    # follow live
-journalctl -u vetoed --since "1 hour ago"  # recent
-journalctl -u vetoed -p err                # errors only
-journalctl -u vetoed | grep -E "ORDER|VETO|reconcile"
-```
-
-Every line is `ISO-8601 UTC  LEVEL  message`.
-
-### 8. Restart
-
-```bash
-sudo systemctl restart vetoed
-```
-
-Safe at any time. SIGTERM lets the in-flight cycle finish and release its lock;
-the next cycle reconciles against the broker before doing anything.
-
-### 9. Stop
-
-```bash
-sudo systemctl stop vetoed              # stop now
-sudo systemctl disable vetoed           # and don't start at boot
-```
+**Actions → Vetoed agent → ⋯ → Disable workflow.** Takes effect immediately.
 
 Stopping does **not** close open positions. Exits are evaluated by the running
-agent, so a stopped agent stops managing. To flatten, close positions in the
-Alpaca dashboard.
+agent, so a disabled workflow stops managing. To flatten, close positions in
+the Alpaca dashboard.
 
-### 10. Verify it is alive
+### 7. Deploy a new version
 
-```bash
-systemctl is-active vetoed                       # -> active
-cat /opt/vetoed/journal/health.json              # heartbeat
-journalctl -u vetoed --since "2 hours ago" | grep "cycle start"
-```
+`git push` to `main`. The next tick uses it. Tests run separately on push, so
+check Actions is green before letting a tick pick up a change.
 
-Or over HTTP, if the dashboard unit is running:
+### What you give up
 
-```bash
-sudo systemctl enable --now vetoed-dashboard
-ssh -N -L 8000:127.0.0.1:8000 you@your-vps
-curl -s localhost:8000/api/health | python3 -m json.tool
-```
+Honest accounting, because this is the real trade-off:
 
-`/api/health` returns **200** when the last heartbeat is recent and **503**
-when it is stale, so a plain uptime monitor can watch the URL without parsing
-the body. It reports process liveness, last successful cycle, market status,
-last error, equity, and open positions. It has no route that can place an
-order.
-
-The dashboard binds to `127.0.0.1` deliberately — it shows account equity and
-position detail. Reach it through an SSH tunnel rather than exposing it.
-
-### 11. Deploy a new version
-
-```bash
-cd /opt/vetoed
-sudo -u vetoed git pull
-sudo -u vetoed .venv/bin/pip install -q -e '.[dashboard]'
-sudo -u vetoed .venv/bin/python -m pytest -q     # gate the deploy on green
-sudo systemctl restart vetoed
-```
-
-Or re-run `sudo bash deploy/install.sh`, which is idempotent.
-
-Restarting mid-session is safe by design: the next cycle reconciles against
-Alpaca before evaluating anything, so a deploy cannot produce a duplicate
-position.
-
-### What makes a restart safe
-
-A remote process restarts for reasons you do not control. Three mechanisms
-stop that becoming a duplicate trade:
-
-- **Broker reconciliation.** Risk gates are fed positions and open orders from
-  Alpaca, not from the local journal. The journal records what this process
-  *believes*; a crash between submitting and journalling makes those differ.
-- **Deterministic `client_order_id`.** Derived from the trade intent and the
-  date, so a retry produces the *same* id and Alpaca rejects it as a
-  duplicate. The previous timestamp-based id threw that protection away.
-- **Single-flight lock.** A cross-process lock file, so a systemd restart or a
-  manual run cannot overlap a cycle already in flight.
-
-An order whose fate is unknown — a timeout, not a rejection — is journalled
-`uncertain` and **counted as live risk** until the broker resolves it.
-Over-counting costs one skipped trade; under-counting can double a position.
-There are no blind retries anywhere in the order path.
-
-Full detail in [`docs/deploy.md`](docs/deploy.md).
+- **Punctuality.** GitHub schedules are best-effort — runs can be delayed under
+  load, and can be dropped. A late *entry* costs nothing. A late *exit check*
+  is the actual exposure: a stop-loss evaluated 30 minutes late is real
+  slippage. If that matters more than cost, the agent runs equally well under
+  any scheduler on a small VPS — `python -m agent.loop --live --schedule`, with
+  `POLL_INTERVAL_MINUTES` controlling the interval.
+- **Public logs.** This repo is public, so workflow logs are too. Equity and
+  positions are visible. Secrets are masked by GitHub; the account itself is
+  paper, and the same figures are already on the public dashboard.
+- **Granularity is unchanged.** Exits are evaluated per cycle in every design,
+  including on a dedicated server. Nothing watches positions continuously.
 
 ## Tests
 

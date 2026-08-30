@@ -112,6 +112,25 @@ rejected for carrying no measurable gap**. (This is a *historical* snapshot,
 QQQ is the one to look at: implied volatility *below* realised, so both its
 structurally valid spreads scored a negative gap and neither was taken.
 
+## 2b. Autonomy
+
+The agent runs itself on a **GitHub Actions schedule**, approximately every 30
+minutes during the US market session — no server, no cost, nothing that has to
+stay powered on. Alpaca's own clock gates every cycle, so holidays and early
+closes are handled by the broker rather than by a cron expression.
+
+Each tick is a fresh container, which is a **cold start with a stale journal
+every single time**. That is safe because the risk gates are fed positions and
+open orders read from Alpaca, never from the local journal, and every entry
+carries a deterministic `client_order_id` that Alpaca refuses to fill twice. An
+order whose fate is unknown — a timeout, not a rejection — is counted as live
+risk until the broker resolves it, and the order path contains no retries.
+
+The honest cost of this choice: GitHub schedules are best-effort, so a tick can
+be late or dropped. A late entry costs nothing; a late exit check is real
+exposure. Exits are evaluated per cycle in any deployment, so this is a
+difference of punctuality, not of kind.
+
 ## 3. Architecture
 
 ```

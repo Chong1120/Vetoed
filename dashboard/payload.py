@@ -3,7 +3,7 @@ payload.py - the dashboard's data, built with nothing but the standard library.
 
 Both consumers read from here so they can never drift apart:
 
-    dashboard/api.py          serves these live over HTTP  (local or VPS)
+    dashboard/api.py          serves these live over HTTP  (local)
     scripts/export_static.py  freezes them into data.json   (GitHub Pages)
 
 That matters because the static export is the submitted demo URL. If the

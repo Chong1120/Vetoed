@@ -1,13 +1,13 @@
 # Deploying Vetoed
 
-Two things can be deployed, and they are deliberately separate:
+Two things are deployed, and they are deliberately separate:
 
 | | What it is | Where it runs |
 |---|---|---|
-| **The agent** | Trades. Holds broker credentials. | A Linux VPS you control |
-| **The dashboard** | Read-only journal viewer. No credentials, no order path. | Anywhere — VPS, GitHub Pages, a container |
+| **The agent** | Trades. Holds broker credentials. | GitHub Actions, on a schedule |
+| **The dashboard** | Read-only journal viewer. No credentials, no order path. | GitHub Pages, as a static build |
 
-Operational commands live in
+Operational steps are in
 [README.md](../README.md#running-vetoed-unattended). This document covers *why*
 unattended operation is safe, which is the part a reviewer should check.
 
@@ -15,47 +15,71 @@ unattended operation is safe, which is the part a reviewer should check.
 
 # Part 1 — The agent, unattended
 
-## Why systemd and not Docker
+## Why GitHub Actions
 
-Both were viable. systemd won on three counts specific to this project,
-and the Docker path has since been deleted because nothing used it:
+The agent needs to run without depending on a laptop being awake. The options
+were a paid VPS under systemd, or GitHub Actions. Actions won for this project:
 
-1. **Secrets.** `EnvironmentFile=` reads `/opt/vetoed/.env` at mode 600, owned
-   by the service user. Docker's equivalents are worse: `--env-file` contents
-   show up in `docker inspect`, and build-time env leaks into the image.
-2. **Restart semantics.** `Restart=always` with `StartLimitBurst=5` restarts on
-   crashes but *stops* on a crash loop — which is what a bad key produces. A
-   Docker restart policy retries forever and hides the cause.
-3. **Signals.** systemd stops units with SIGTERM; `loop.py` handles it,
-   finishes the cycle in flight, and releases the run lock. Getting that right
-   in Docker needs correct PID-1 handling, which is easy to get wrong.
+1. **It costs nothing.** Public repositories get unlimited Actions minutes, and
+   the repo is already public because the hackathon requires it.
+2. **The infrastructure already exists.** The Pages workflow was already
+   deploying the dashboard from this repo; the agent is one more workflow.
+3. **Nothing to maintain.** No server to patch, no user to manage, no
+   credentials sitting on a box.
+4. **The safety work was already done.** See below — the reconciliation this
+   agent does every cycle makes a stateless runner safe, and that code was
+   written before the hosting decision, not to justify it.
 
-A `Dockerfile` and a `render.yaml` used to exist for the dashboard. Neither
-was ever deployed — the public demo is a static GitHub Pages build and the
-VPS dashboard runs under systemd — so both were removed rather than left as
-scaffolding a reviewer would have to evaluate.
+An earlier revision of this repository shipped systemd units and an installer
+for a VPS. They were removed rather than kept alongside, for the same reason
+the Dockerfile was: two deployment stories means a reviewer has to work out
+which one is real.
 
-## The idempotency logic, exactly
+**The agent is not tied to Actions.** `python -m agent.loop --live --schedule`
+runs the identical cycle on an internal timer, with `POLL_INTERVAL_MINUTES`
+setting the interval, under any supervisor on any host.
 
-A remote process restarts because of reboots, crashes, network drops, Claude
-failures, MCP failures, and deploys. **The failure mode that matters is a
-restart submitting a trade that already exists.** Four mechanisms prevent it.
+## It is not a 24-hour process, and does not need to be
+
+GitHub Actions cannot hold a process open for a day. Each tick is a fresh
+container that runs one cycle and exits.
+
+That is a smaller difference than it sounds. The systemd version was a
+scheduler that *slept* between cycles — alive, but doing nothing. **No work
+happens between ticks in either design.** What actually differs:
+
+| | Long-lived host | GitHub Actions |
+|---|---|---|
+| Process alive between cycles | Yes, idle | No |
+| Work done between cycles | None | None |
+| Exit rules evaluated | Once per cycle | Once per cycle |
+| Punctuality | On time | Best-effort; may be delayed or dropped |
+| Single-flight | `runlock.py` lock file | Workflow `concurrency` group |
+| Secrets | File at mode 600 | Encrypted repository secrets |
+
+## Why a stateless runner is safe
+
+Every Actions run begins with an empty machine and a journal checked out from
+git. **That is a stale-state cold start by definition** — the exact scenario
+`agent/reconcile.py` exists for. The four mechanisms below were built for
+restart safety on a server, and they carry over unchanged.
 
 ### 1. The broker is authoritative, not the journal
 
-Before this work, the risk gates were fed an `AccountState` built from
-`journal.open_spreads()`. The journal records what this process *believes* it
-did. Those come apart in exactly the situations a restart creates:
+Risk gates were previously fed an `AccountState` built from
+`journal.open_spreads()`. The journal records what a process *believes* it did.
+On Actions the journal is whatever was last committed, which may be several
+cycles stale.
 
 | Situation | Journal says | Broker says | Old behaviour |
 |---|---|---|---|
-| Killed after submit, before `record_order` | nothing | position open | **opens a second position** |
+| Runner killed after submit, before the commit | nothing | position open | **opens a second position** |
 | Submission timed out | `failed` (excluded from risk) | position open | **opens a second position** |
 | Position expired or assigned | still open | nothing | blocks valid trades |
 | Position opened by hand | nothing | position open | invisible to every gate |
 
-`agent/reconcile.py` now fetches positions and open orders from Alpaca each
-cycle and classifies every journal row against them:
+`reconcile.py` fetches positions and open orders from Alpaca each cycle and
+classifies every journal row against them:
 
 ```
 both legs held at broker         -> genuinely open, counts as risk
@@ -67,126 +91,135 @@ leg at broker, no journal row    -> orphan, still counts toward concentration
 ```
 
 `account_state_from()` then builds the risk state from **broker-confirmed rows
-only**, with orphan legs counted as ceil(legs / 2) spreads, so an unexplained
-holding still consumes concentration budget rather than being silently free.
+only**, with orphan legs counted as ceil(legs / 2) spreads so an unexplained
+holding still consumes concentration budget.
 
 ### 2. A deterministic client_order_id
 
 Alpaca rejects a duplicate `client_order_id`. That is the strongest idempotency
-primitive available, and the old timestamp-based id (`alpha-<epoch_ms>`) threw
-it away — a retry produced a *new* id, so the broker had no way to recognise
-the resubmission.
+primitive available, and a timestamp-based id throws it away — a re-run
+produces a *new* id the broker cannot recognise.
 
 ```
 vetoed-<YYYYMMDD>-<sha1(date|underlying|short|long|contracts)[:12]>
 ```
 
 Same trade intent on the same day produces the same id, so **Alpaca refuses the
-second submission**. Keyed on the date so the same spread can legitimately be
-reopened tomorrow.
+second submission**. This is what makes a re-run of a workflow safe. Keyed on
+the date so the same spread can legitimately be reopened tomorrow.
 
 ### 3. A pre-submit guard
 
-Immediately before the only write path in the agent, `already_working()` checks
-three independent things against the broker:
+Immediately before the only write path, `already_working()` checks three
+independent things against the broker: is the deterministic id already on a
+working order, is the short leg already held, does the short leg appear on any
+working order. Any hit means skip and journal `duplicate skipped`.
 
-1. is the deterministic `client_order_id` already on a working order?
-2. is the short leg already held as a position?
-3. does the short leg appear on any working order?
+### 4. Uncertain is not failed, and nothing is retried blindly
 
-Any hit means skip, journal `duplicate skipped`, submit nothing.
-
-### 4. Uncertain is not failed, and nothing is ever retried blindly
-
-A network timeout is **not** a rejection. `executor.py` now distinguishes them:
-a message matching a definite-rejection marker is `failed`; everything else is
+A network timeout is **not** a rejection. `executor.py` separates them: a
+message matching a definite-rejection marker is `failed`, everything else is
 `uncertain`.
 
-Uncertain orders are journalled as `uncertain` and **counted as live risk**,
+Uncertain orders are journalled `uncertain` and **counted as live risk**,
 because the asymmetry is not close — counting a phantom position costs one
-skipped trade, while missing a real one can double a position. The next cycle's
-reconciliation resolves it against the broker and marks it `not_filled` if it
-never arrived.
+skipped trade, missing a real one can double a position. The next cycle's
+reconciliation resolves it against the broker.
 
 **The order path contains no retry.** A blind retry is precisely how a timeout
-becomes a double position.
+becomes a double position. Re-running a failed workflow is safe for the same
+reason: the deterministic id collides.
 
-## Single-flight locking
+## Single-flight
 
-`agent/runlock.py` is a cross-process lock *file*, not a threading primitive,
-because the overlaps that matter are between processes: a systemd restart
-mid-cycle, or an operator running the agent by hand while the service is up.
-APScheduler's `max_instances` handles neither.
+The workflow declares:
 
-Claimed with `O_CREAT|O_EXCL` (atomic on POSIX and Windows), holding the PID and
-a timestamp. A lock left behind by a dead process is reclaimed with a logged
-message rather than wedging the service forever.
+```yaml
+concurrency:
+  group: vetoed-agent
+  cancel-in-progress: false
+```
 
-A cycle that cannot take the lock is **skipped, not queued** — the next tick is
-minutes away, and a queued cycle would act on a stale shortlist.
+GitHub will not start a second cycle while one is in flight.
+`cancel-in-progress: false` is deliberate — killing a cycle halfway through
+submitting an order is worse than skipping a tick.
 
-## How market hours are enforced
+`agent/runlock.py` provides the same guarantee on a long-lived host, where a
+lock file can persist. On Actions it is a no-op, since each run has its own
+filesystem.
+
+## Market hours
 
 Two layers, and only one is authoritative:
 
-- **Coarse:** a cron window, Mon–Fri 09:00–16:59 `America/New_York`. Explicitly
-  US Eastern, never the VPS's local clock.
+- **Coarse:** `cron: "*/30 13-21 * * 1-5"`. GitHub cron is UTC with no
+  timezone, so the window is deliberately **wide** — 13:00–21:00 UTC covers the
+  US session under both EDT (13:30–20:00) and EST (14:30–21:00). No
+  daylight-saving change can silently stop trading.
 - **Authoritative:** `market.is_market_open()` — Alpaca's own clock — checked at
-  the top of *every* cycle. It knows holidays and early closes, which no cron
-  expression does.
+  the top of every cycle. It knows holidays and early closes, which no cron
+  expression does. Ticks outside the session exit in about a second.
 
-`--force` bypasses the market check for a single debugging cycle. **It is
-refused in combination with `--schedule`**, because scheduled-and-forced means
-"trade stale weekend quotes, forever".
+So the agent fires **approximately every 30 minutes** during the US market
+session, and does nothing outside it.
 
-## Poll interval
+`--force` bypasses the market check for one debugging cycle. The workflow never
+combines it with `--live`, and `loop.py` refuses `--force` with `--schedule`.
 
-`POLL_INTERVAL_MINUTES`, default **30**, clamped to 1–240 with a warning and a
-fallback on anything invalid.
+## Punctuality — the real trade-off
 
-30 is the default because a cycle's inputs barely move faster than that: a
-20-day realised-vol estimate and 2–14 DTE Greeks drift slowly. Polling faster
-re-examines the same candidates and burns API and Claude quota without
-surfacing better trades.
+GitHub schedules are best-effort. Runs can be delayed under load and can be
+dropped entirely. Stated plainly because it is the one place this hosting
+choice costs something:
 
-It is **configuration, not strategy** — every gate, threshold and exit rule is
-byte-identical at any interval. That is why it is safe to expose, and why a
-shorter value is a demo aid rather than a different system.
+- A **late entry** costs nothing. The candidate is either still there or it is
+  not, and the screener re-evaluates from scratch every cycle.
+- A **late exit check** is the real exposure. Stops, the delta stop and the
+  1-DTE close are all evaluated per cycle, so a delayed tick means a stop
+  evaluated late.
+
+This is a difference of degree, not of kind: exits are evaluated per cycle on a
+dedicated server too. Nothing in this system watches positions continuously.
+A VPS makes ticks punctual; it does not make them continuous.
 
 ## Failure behaviour
 
 | Failure | Behaviour |
 |---|---|
-| One cycle raises | Caught and logged, health file records it, scheduler continues |
-| Claude unavailable | Deterministic fallback; the agent keeps running |
+| One cycle raises | Job fails, journal still committed, next tick unaffected |
+| Claude unavailable | Deterministic fallback; the agent keeps trading |
 | MCP spawn fails | Cycle fails safe, no order attempted |
 | Broker unreachable | Positions still managed from the journal; **no new entries** |
-| One symbol's data fails | That symbol is skipped, the others are unaffected |
-| SIGTERM / SIGINT | Cycle finishes, lock released, clean exit |
-| Crash loop | systemd stops after 5 restarts in 10 minutes so the cause is visible |
+| One symbol's data fails | That symbol is skipped, the others unaffected |
+| Runner cancelled | SIGTERM handled; the deterministic id prevents a duplicate on re-run |
+| Two ticks overlap | `concurrency` group prevents it |
 
-## Demonstrating unattended mode without waiting hours
+## Demonstrating it without waiting for a tick
+
+**Actions → Vetoed agent → Run workflow.** Defaults to **dry-run**: a full
+cycle is screened, decided, gated and journalled, but nothing is submitted.
+
+Locally:
 
 ```bash
-# One cycle right now, market closed, nothing submitted
-python -m agent.loop --force
-
-# Scheduler on a one-minute tick, dry run
+python -m agent.loop --force                    # one dry cycle, market closed
 POLL_INTERVAL_MINUTES=1 python -m agent.loop --schedule
-
-# Prove the lock: start one, then run another in a second terminal
-#   -> "skipping tick: cycle already running (pid N, held Ns)"
-
-# Watch the heartbeat
-watch -n2 cat journal/health.json
-curl -s localhost:8000/api/health | python3 -m json.tool
 ```
 
-**Those are dry runs.** The dashboard labels every such order
-`DRY RUN · NOT SENT` and marks cycles that ran with the market closed, so a
-demo cannot be mistaken for live paper activity. Four states are distinguished
-throughout: *dry run*, *paper-account activity*, *historical snapshot*, and
-*current live screen*. No broker activity and no P&L is ever simulated.
+**Those are dry runs.** The dashboard labels such orders `DRY RUN · NOT SENT`
+and marks cycles that ran with the market closed, so a demo cannot be mistaken
+for live paper activity. Four states are distinguished throughout: *dry run*,
+*paper-account activity*, *historical snapshot*, and *current live screen*. No
+broker activity and no P&L is ever simulated.
+
+## What is exposed, and what is not
+
+The repository is public, so **workflow logs are public**. They show equity,
+open positions and decisions — the same figures already on the public
+dashboard, for a paper account.
+
+Secrets are encrypted by GitHub and masked in logs automatically. The Alpaca
+account id is never printed. `.env` is gitignored and has never been committed.
 
 ---
 
@@ -224,25 +257,29 @@ git push
 
 The workflow rebuilds and republishes automatically.
 
-## B. systemd on the VPS — live view alongside the agent
+## B. Locally — live view while developing
 
-For watching the agent while it runs, including the `/api/health` endpoint.
+Run it against your own journal, with the `/api/health` endpoint live:
 
 ```bash
-sudo systemctl enable --now vetoed-dashboard
-ssh -N -L 8000:127.0.0.1:8000 you@your-vps
+python -m uvicorn dashboard.api:app --port 8000
 # http://localhost:8000
 ```
 
-Bound to `127.0.0.1` on purpose — the page shows account equity and position
-detail. Reach it through an SSH tunnel rather than exposing it. Do not bind to
-`0.0.0.0` without a reverse proxy and authentication in front.
+Useful when running cycles by hand. `/api/health` returns **200** when the last
+heartbeat is recent and **503** when it is stale, so it also works as a check
+after a local `--schedule` run.
+
+Do not expose this beyond localhost without a reverse proxy and authentication:
+the page shows account equity and position detail. The published version on
+Pages is a frozen snapshot, which is a different risk profile from a live
+endpoint into a running agent.
 
 ## One page, two modes
 
 `index.html` probes `/api/summary` once on load:
 
-- **A server answers** (local, or the VPS unit) → live mode, polling every 15s
+- **A server answers** (running locally) → live mode, polling every 15s
 - **Nothing answers** (GitHub Pages) → reads the bundled `data.json` and shows
   a snapshot pill with the freeze time
 

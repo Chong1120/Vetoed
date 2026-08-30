@@ -1,11 +1,15 @@
 """
 runlock.py - only one trading cycle may be in flight, ever.
 
+Used when a cycle runs on a long-lived host. On GitHub Actions a lock file
+cannot work - every run has its own filesystem - so the workflow's
+`concurrency` group provides the same guarantee there.
+
 APScheduler's `max_instances` already stops a job overlapping ITSELF inside one
 process. It does nothing about the cases an unattended deployment actually
 hits:
 
-  * systemd restarts the unit while a cycle is mid-flight
+  * a supervisor restarts the process while a cycle is mid-flight
   * an operator SSHes in and runs `python -m agent.loop --live` by hand while
     the service is running
   * two service instances are started by mistake

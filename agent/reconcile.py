@@ -3,10 +3,13 @@ reconcile.py - the broker is the source of truth, not our journal.
 
 WHY THIS MODULE EXISTS
 ----------------------
-An unattended process restarts: the VPS reboots, Python crashes, a network
-call hangs, systemd restarts the unit mid-cycle. Before this module, a restart
-could open a duplicate position, because `risk.py` was fed an AccountState
-built entirely from `journal.open_spreads()`:
+An unattended agent starts from cold constantly. On GitHub Actions that is
+every single tick - a fresh container with a journal checked out from git. On a
+long-lived host it is reboots, crashes, hung network calls and redeploys.
+
+Before this module, a cold start could open a duplicate position, because
+`risk.py` was fed an AccountState built entirely from
+`journal.open_spreads()`:
 
     acct_state = risk.AccountState(open_positions=len(journal_rows), ...)
 
@@ -35,8 +38,9 @@ A network timeout is not a rejection. If we do not know whether an order
 arrived, the safe assumption is that it DID - counting a position that does
 not exist costs us one skipped trade, while missing one that does exist can
 double a position. Uncertain orders are therefore counted as open risk until
-the broker says otherwise, and `resolve_uncertain()` looks them up by
-`client_order_id` on the next cycle.
+the broker says otherwise; `reconcile()` resolves them on the next cycle by
+checking the broker's positions and working orders, and marks them
+`not_filled` only once the broker has confirmed it never saw them.
 """
 
 from __future__ import annotations

@@ -1,0 +1,158 @@
+# Vetoed - the trading agent, on a schedule. ALPACA PAPER TRADING ONLY.
+#
+# WHAT THIS IS, AND IS NOT
+# GitHub Actions cannot hold a process for 24 hours, and this agent does not
+# need one. Each tick is a fresh container that runs exactly one cycle -
+# reconcile, manage exits, screen, decide, gate, maybe trade - and exits. The
+# systemd version did the same thing; it just slept between cycles instead of
+# not existing. No work happens between ticks in either design.
+#
+# WHY A FRESH CONTAINER IS SAFE
+# Every run starts with an empty machine and a journal checked out from git,
+# which is a stale-state restart by definition. That is precisely the scenario
+# agent/reconcile.py was written for: the risk gates are fed positions and open
+# orders read from Alpaca, never from the journal, and every entry carries a
+# deterministic client_order_id that Alpaca refuses to fill twice.
+#
+# PUNCTUALITY
+# GitHub schedules are best-effort. Runs can be delayed under load and can be
+# dropped. So this fires APPROXIMATELY every 30 minutes, and the docs say so.
+# A late entry costs nothing. A late exit check is the real exposure - see
+# README, "What you give up".
+
+name: Vetoed agent
+
+on:
+  schedule:
+    # Times are UTC. GitHub cron has no timezone, so the window is deliberately
+    # WIDE - 13:00-21:00 UTC covers the US session under both EDT (13:30-20:00)
+    # and EST (14:30-21:00), so no DST changeover can silently stop trading.
+    #
+    # The window is a coarse filter, not the decision. Alpaca's own clock is
+    # checked at the top of every cycle and is authoritative: it knows holidays
+    # and early closes, which no cron expression does. Ticks outside the session
+    # exit in about a second having done nothing.
+    - cron: "*/30 13-21 * * 1-5"
+
+  # Manual trigger, for demos and for proving the thing works without waiting
+  # for a tick. Defaults to a DRY RUN so an accidental click cannot trade.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run journals a decision but submits nothing"
+        type: choice
+        default: dry-run
+        options: [dry-run, live]
+      force:
+        description: "run even if the market is closed (dry-run only)"
+        type: boolean
+        default: false
+
+# Single-flight. Replaces the lock file that agent/runlock.py provides on a
+# long-lived host - a lock file cannot work here because every run gets its own
+# filesystem. cancel-in-progress is false on purpose: killing a cycle halfway
+# through submitting an order is the one thing worse than skipping a tick.
+concurrency:
+  group: vetoed-agent
+  cancel-in-progress: false
+
+# Only what the job needs: write access to push the journal back.
+permissions:
+  contents: write
+
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    # A cycle takes ~40s. Ten minutes is generous and stops a hung MCP or a
+    # stalled Alpaca call from occupying a runner for six hours.
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install --quiet -e .
+
+      - name: Refuse to run without paper-trading configured
+        env:
+          ALPACA_PAPER_TRADE: ${{ secrets.ALPACA_PAPER_TRADE }}
+        run: |
+          if [ "${ALPACA_PAPER_TRADE}" != "true" ]; then
+            echo "::error::ALPACA_PAPER_TRADE is not 'true'. Vetoed is paper-only."
+            echo "Set the repository secret ALPACA_PAPER_TRADE to exactly: true"
+            exit 1
+          fi
+          echo "paper trading confirmed"
+
+      - name: Run one cycle
+        env:
+          # GitHub masks secret values in logs automatically.
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER_TRADE: ${{ secrets.ALPACA_PAPER_TRADE }}
+          # Optional. Absent, brain.py falls back to deterministic selection
+          # and the agent keeps trading.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Scheduled ticks trade. Manual runs are dry unless explicitly asked.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            FLAGS="--live"
+          elif [ "${{ inputs.mode }}" = "live" ]; then
+            FLAGS="--live"
+          else
+            FLAGS=""
+          fi
+          # --force is a debugging aid for a closed market. Never combined with
+          # --live, so it cannot be used to trade weekend quotes.
+          if [ "${{ inputs.force }}" = "true" ] && [ -z "$FLAGS" ]; then
+            FLAGS="--force"
+          fi
+          echo "flags: ${FLAGS:-<dry run>}"
+          python -m agent.loop $FLAGS
+
+      - name: Commit the journal
+        # Runs even if the cycle failed: a partial journal is still the record
+        # of what happened, and losing it would hide the failure.
+        if: always()
+        run: |
+          git config user.name  "vetoed-agent"
+          git config user.email "vetoed-agent@users.noreply.github.com"
+          git add journal/trades.db
+          if git diff --cached --quiet; then
+            echo "journal unchanged"
+            exit 0
+          fi
+          git commit -q -m "Journal: cycle $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Another tick, or the Pages deploy, may have pushed since checkout.
+          for attempt in 1 2 3; do
+            if git push --quiet; then
+              echo "journal pushed"
+              exit 0
+            fi
+            echo "push rejected, rebasing (attempt ${attempt})"
+            git pull --rebase --quiet || true
+          done
+          echo "::warning::could not push the journal after 3 attempts"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Vetoed cycle"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Trigger | \`${{ github.event_name }}\` |"
+            echo "| Result | \`${{ job.status }}\` |"
+            echo ""
+            if [ -f journal/health.json ]; then
+              echo '```json'
+              cat journal/health.json
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -22,12 +22,20 @@ Order of operations matters and is deliberate:
 
 DRY RUN is the default. Nothing reaches the broker unless --live is passed.
 
-UNATTENDED OPERATION. `--schedule` runs this continuously on a VPS. Three
-things make that safe rather than merely possible: the broker reconciliation in
-step 1, the deterministic client_order_id in step 7 (Alpaca refuses a duplicate,
-so a retry after a timeout cannot fill twice), and the single-flight lock in
-step 0. `--force` is refused in combination with `--schedule`, because a
-scheduler that ignores market hours would trade weekend quotes forever.
+UNATTENDED OPERATION. In production this runs one cycle per invocation from
+a GitHub Actions schedule (.github/workflows/agent.yml). `--schedule` runs the
+same cycle on an internal timer instead, for a long-lived host.
+
+Either way a cycle must be safe to start from cold, because an Actions runner
+IS a cold start every time - fresh container, journal checked out from git.
+Three things make that safe rather than merely possible: the broker
+reconciliation in step 1, the deterministic client_order_id in step 7 (Alpaca
+refuses a duplicate, so a retry after a timeout cannot fill twice), and the
+single-flight guard in step 0 - runlock.py on a long-lived host, the
+workflow's `concurrency` group on Actions, where a lock file cannot persist.
+
+`--force` is refused in combination with `--schedule`, because a scheduler that
+ignores market hours would trade weekend quotes forever.
 """
 
 from __future__ import annotations
@@ -73,7 +81,7 @@ _shutdown = False
 
 
 # --------------------------------------------------------------------------- #
-# logging - structured enough to grep in journalctl, plain enough to read
+# logging - structured enough to grep in a CI log, plain enough to read
 # --------------------------------------------------------------------------- #
 
 def log(msg: str, level: str = "INFO") -> None:
@@ -473,7 +481,8 @@ async def guarded_cycle(dry_run: bool, force: bool, use_llm: bool) -> int:
 
 
 def _install_signal_handlers(sched=None) -> None:
-    """systemd stops a unit with SIGTERM. Exit cleanly so the lock is freed."""
+    """A supervisor stops a process with SIGTERM - systemd, Docker, or a CI
+    runner cancelling a job. Exit cleanly so the run lock is released."""
     def handler(signum, _frame):
         global _shutdown
         _shutdown = True
@@ -538,7 +547,7 @@ def main() -> int:
         asyncio.run(guarded_cycle(dry_run, False, not args.no_llm))
 
     # The cron window is a coarse filter in US Eastern time - never the local
-    # clock of whatever VPS this runs on. The AUTHORITATIVE market-open check
+    # clock of whatever host this runs on. The AUTHORITATIVE market-open check
     # is Alpaca's own clock inside run_cycle(), which handles holidays and
     # early closes that a cron expression cannot.
     sched.add_job(

@@ -1,9 +1,11 @@
 """Unattended operation: restart safety, idempotency, locking, hard locks.
 
-These test the failure modes a VPS actually produces - a killed process, a
-timed-out submission, a stale lock, a journal that disagrees with the broker -
-rather than the happy path. Anything that could turn a restart into a duplicate
-position belongs here.
+These test the failure modes an unattended agent actually produces - a cold
+start with a stale journal, a timed-out submission, a killed process, a stale
+lock, a journal that disagrees with the broker - rather than the happy path.
+On GitHub Actions every tick is a cold start, so these are the normal path
+there, not the edge case. Anything that could turn a restart into a duplicate
+position belongs in this file.
 """
 
 import os
