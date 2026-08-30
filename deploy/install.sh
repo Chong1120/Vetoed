@@ -30,7 +30,14 @@ id -u "$APP_USER" >/dev/null 2>&1 || \
     useradd --system --home-dir "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
 
 say "Code at ${APP_DIR}"
+# After the first run the repo is owned by ${APP_USER}. Modern git refuses
+# to operate on a repo owned by another user ("detected dubious ownership"),
+# which breaks every re-run, root included. Declaring it safe is the fix.
+git config --global --add safe.directory "$APP_DIR" 2>/dev/null || true
 if [ -d "$APP_DIR/.git" ]; then
+    # NOTE: this DISCARDS local edits under /opt/vetoed. The deployed copy
+    # is meant to be a clean checkout of origin/main - change the repo and
+    # push, rather than hand-editing the server.
     git -C "$APP_DIR" fetch --quiet origin
     git -C "$APP_DIR" reset --hard --quiet origin/main
 else
@@ -64,7 +71,9 @@ install -m 644 "$APP_DIR/deploy/vetoed-dashboard.service" /etc/systemd/system/
 systemctl daemon-reload
 
 say "Smoke test"
-sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python" -m pytest -q "$APP_DIR/tests" \
+# Run from APP_DIR so pytest takes rootdir and pythonpath from the project's
+# own pyproject.toml, not from whatever directory sudo was invoked in.
+( cd "$APP_DIR" && sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python" -m pytest -q ) \
     || warn "tests failed - do not start the agent until this is understood"
 
 cat <<'NEXT'
