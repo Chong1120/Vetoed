@@ -55,8 +55,9 @@ between the strikes the payoff runs linearly +max_profit → −max_loss,
 so its expectation is (max_profit − max_loss) / 2
 
 ev_rn  ← that spread priced at IMPLIED vol
-ev_rw  ← that spread priced at REALISED vol   (what we rank on)
+ev_rw  ← that spread priced at REALISED vol
 vrp_edge = ev_rw − ev_rn  ← implied-minus-realised, in dollars
+                            THIS is the gate and the ranking key
 ```
 
 **One model, one variable — and that is a correction.** Both EVs run through
@@ -70,11 +71,28 @@ none existed. Journal run 3 traded IWM at implied 14.84% against realised
 and still printed `vrp_edge = 2.75`. Of that, $2.36 was model mismatch. Priced
 through one model it reads **$0.34**.
 
-Five tests in `test_screener_math.py` now pin the invariant that would have
+Nine tests in `test_screener_math.py` now pin the invariant that would have
 caught it: equal implied and realised must yield **zero** edge, implied *below*
 realised must yield a **negative** one, and delta must not be mistaken for a
-probability. This is also why QQQ — implied below realised — produces **zero
-candidates** and correctly sits out.
+probability.
+
+**The premium is the gate, not a footnote.** `vrp_edge` must clear $2.00 or the
+spread is discarded, and the shortlist is ranked on `vrp_edge / max_loss` — not
+on `ev_rw`. Ranking on real-world EV ranks on how *low* the 20-day realised-vol
+estimate happened to come in, which is estimation error (that estimate carries
+~16% relative standard error) rather than an edge anyone is paying for. A
+spread whose implied vol is unavailable is dropped outright: an edge that
+cannot be measured cannot be claimed.
+
+The live screen shows the discipline working. Of 17 structurally valid spreads,
+**11 were rejected for carrying no measurable premium**:
+
+| Underlying | implied / realised | Result |
+|---|---|---|
+| AAPL | **1.26** | top two candidates, **+$41.32** and **+$32.30** of edge |
+| SPY | 1.069 | three candidates, +$4.28 to +$5.43 |
+| IWM | 1.067 | one candidate at +$10.11; three others cut at ~$0 |
+| QQQ | **0.894** | **zero candidates** — implied *below* realised, so it sits out |
 
 ## 3. Architecture
 

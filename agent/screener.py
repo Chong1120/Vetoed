@@ -30,9 +30,7 @@ risk premium:
 
 So this module uses BOTH measures deliberately:
 
-    credit received  <- the market quote          (risk-neutral, has the premium)
-    probability      <- 20-day realised volatility (real-world)
-
+    credit received  <- the market quote  (risk-neutral, carries the premium)
     ev_rn            <- that credit priced at the market's IMPLIED volatility
     ev_rw            <- that credit priced at 20-day REALISED volatility
 
@@ -40,7 +38,12 @@ Both EVs run through ONE probability model and differ only in the volatility
 fed into it. That is the whole point: `vrp_edge = ev_rw - ev_rn` then isolates
 exactly the implied-minus-realised gap - the premium being harvested - and
 correctly reads ~0 when implied and realised agree, i.e. when there is no
-premium to harvest. `ev_rw` is what we rank on.
+premium to harvest.
+
+`vrp_edge` is therefore both the GATE and the RANKING KEY. Ranking on `ev_rw`
+alone would rank on how low the 20-day realised-vol estimate happened to come
+in - an estimation error - instead of on what the market is actually paying
+us to carry the risk.
 """
 
 from __future__ import annotations
@@ -89,6 +92,13 @@ MIN_CREDIT_RATIO = 0.12
 MAX_CREDIT_RATIO = 0.60
 
 MIN_EV_RW = 1.00        # dollars per spread, real-world measure
+
+# The premium is the entire thesis, so it is a GATE and the ranking key - not
+# a diagnostic printed beside a ranking that ignores it. Below ~$2 the measured
+# edge sits inside the noise of a 20-day realised-vol estimate (~16% relative
+# standard error), so it is not evidence of anything.
+MIN_VRP_EDGE = 2.00
+
 MAX_CANDIDATES = 8
 
 
@@ -200,8 +210,13 @@ def _long_leg_ok(row: OptionRow) -> bool:
 
 # --------------------------------------------------------------------------- #
 
-def _build_spreads(snap: MarketSnapshot, right: str) -> list[SpreadCandidate]:
-    """Pair every viable short leg with a protective long leg."""
+def _build_spreads(snap: MarketSnapshot, right: str,
+                   min_vrp: float = MIN_VRP_EDGE) -> list[SpreadCandidate]:
+    """Pair every viable short leg with a protective long leg.
+
+    `min_vrp` is the floor on measured volatility risk premium. Tests lower it
+    to inspect the raw maths; production keeps the default.
+    """
     spot, vol = snap.spot, snap.realized_vol
     shorts = [r for r in snap.rows if r.right == right and _short_leg_ok(r)]
     longs = {(str(r.expiry), r.strike): r
@@ -265,21 +280,27 @@ def _build_spreads(snap: MarketSnapshot, right: str) -> list[SpreadCandidate]:
             # was demonstrably no premium. Same model both sides, vol is the
             # only thing that changes.
             iv = short.iv if (short.iv is not None and short.iv > 0) else None
-            p_short_rn, p_long_rn = (float("nan"), float("nan"))
-            if iv is not None:
-                p_short_rn, p_long_rn = _probs(iv)
+            if iv is None:
+                continue     # no IV -> the edge is unmeasurable -> not tradable
+            p_short_rn, p_long_rn = _probs(iv)
             if math.isnan(p_short_rn) or math.isnan(p_long_rn):
-                # No usable IV. Fall back to delta and wear the bias rather
-                # than discard an otherwise valid candidate.
-                p_short_rn, p_long_rn = short.abs_delta, long_leg.abs_delta
+                continue
             ev_rn, pop_rn = _three_point_ev(p_short_rn, p_long_rn,
                                             max_profit, max_loss)
+
+            # The gate. We are here to harvest a premium; if the market is not
+            # paying one, a high real-world EV only means the realised-vol
+            # estimate came in low - an estimation error we would be ranking
+            # on, rather than an edge we are being paid for.
+            vrp_edge = ev_rw - ev_rn
+            if vrp_edge < min_vrp:
+                continue
 
             worst_spread = max(short.spread_pct, long_leg.spread_pct)
             min_oi = min(short.open_interest, long_leg.open_interest)
             distance_pct = abs(short.strike - spot) / spot
 
-            score = ((ev_rw / max_loss)
+            score = ((vrp_edge / max_loss)
                      * (1.0 - min(worst_spread, 0.9))
                      * WIDTH_PREFERENCE.get(width, 1.0))
 
@@ -303,7 +324,7 @@ def _build_spreads(snap: MarketSnapshot, right: str) -> list[SpreadCandidate]:
                 pop_rn=round(pop_rn, 4),
                 ev=round(ev_rw, 2),
                 ev_rn=round(ev_rn, 2),
-                vrp_edge=round(ev_rw - ev_rn, 2),
+                vrp_edge=round(vrp_edge, 2),
                 short_iv=round(short.iv, 4) if short.iv is not None else None,
                 realized_vol=round(vol, 4) if vol == vol else 0.0,
                 min_open_interest=min_oi,
@@ -316,7 +337,8 @@ def _build_spreads(snap: MarketSnapshot, right: str) -> list[SpreadCandidate]:
 
 # --------------------------------------------------------------------------- #
 
-def screen_snapshot(snap: MarketSnapshot) -> list[SpreadCandidate]:
+def screen_snapshot(snap: MarketSnapshot,
+                    min_vrp: float = MIN_VRP_EDGE) -> list[SpreadCandidate]:
     """Valid credit spreads for one underlying, with a one-sided trend filter.
 
     Selling PUT spreads into a market already below its 20-day average is the
@@ -327,11 +349,12 @@ def screen_snapshot(snap: MarketSnapshot) -> list[SpreadCandidate]:
     """
     cands: list[SpreadCandidate] = []
     if snap.above_trend:
-        cands += _build_spreads(snap, "put")
+        cands += _build_spreads(snap, "put", min_vrp)
     if not snap.above_trend or not snap.sma20:
-        cands += _build_spreads(snap, "call")
+        cands += _build_spreads(snap, "call", min_vrp)
     if not cands and not snap.sma20:
-        cands = _build_spreads(snap, "put") + _build_spreads(snap, "call")
+        cands = (_build_spreads(snap, "put", min_vrp)
+                 + _build_spreads(snap, "call", min_vrp))
     return cands
 
 

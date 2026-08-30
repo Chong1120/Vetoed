@@ -7,8 +7,8 @@ import pytest
 from datetime import date, datetime
 
 from agent.data import MarketSnapshot, OptionRow
-from agent.screener import (_build_spreads, _three_point_ev, norm_cdf,
-                            prob_below)
+from agent.screener import (MIN_VRP_EDGE, _build_spreads, _three_point_ev,
+                            norm_cdf, prob_below)
 
 
 # --------------------------------------------------------------------------- #
@@ -160,14 +160,14 @@ def test_no_premium_is_reported_when_implied_equals_realised():
     Same vol on both sides must mean no edge. If this test ever fails, the two
     measures have drifted onto different models again.
     """
-    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call")
+    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call", min_vrp=-1e9)
     assert c.vrp_edge == pytest.approx(0.0, abs=0.01)
     assert c.ev == pytest.approx(c.ev_rn, abs=0.01)
 
 
 def test_premium_appears_only_when_implied_exceeds_realised():
     """Rich implied vol must produce a positive, monotonically larger edge."""
-    edges = [_build_spreads(_snapshot(iv=iv, realised=0.147), "call")[0].vrp_edge
+    edges = [_build_spreads(_snapshot(iv=iv, realised=0.147), "call", min_vrp=-1e9)[0].vrp_edge
              for iv in (0.147, 0.18, 0.25)]
     assert edges[0] == pytest.approx(0.0, abs=0.01)
     assert edges == sorted(edges)
@@ -176,7 +176,7 @@ def test_premium_appears_only_when_implied_exceeds_realised():
 
 def test_cheap_implied_vol_produces_a_negative_edge():
     """Implied BELOW realised means we would be selling vol too cheap."""
-    [c] = _build_spreads(_snapshot(iv=0.10, realised=0.147), "call")
+    [c] = _build_spreads(_snapshot(iv=0.10, realised=0.147), "call", min_vrp=-1e9)
     assert c.vrp_edge < 0
 
 
@@ -186,7 +186,7 @@ def test_delta_is_not_the_itm_probability():
     Delta is N(d1); P(finishing ITM) is N(d2). The gap is ~sigma*sqrt(T) and at
     12 DTE it is worth more EV than MIN_EV_RW, so it cannot be waved away.
     """
-    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call")
+    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call", min_vrp=-1e9)
     p_itm_model = 1.0 - c.pop_rn
     assert abs(p_itm_model - abs(c.short_delta)) > 0.01
 
@@ -200,3 +200,38 @@ def test_partial_region_averages_the_linear_payoff():
     mp, ml = 120.0, 380.0
     ev, _ = _three_point_ev(1.0, 0.0, mp, ml)   # all probability in the band
     assert ev == pytest.approx((mp - ml) / 2)
+
+
+# --------------------------------------------------------------------------- #
+# vrp_edge is the gate and the ranking key, not a diagnostic
+# --------------------------------------------------------------------------- #
+
+def test_gate_rejects_a_spread_with_no_measurable_premium():
+    """Implied == realised means the market is not paying us. Skip it.
+
+    A high ev_rw on such a spread only says the 20-day realised-vol estimate
+    came in low - an estimation error, not an edge.
+    """
+    assert _build_spreads(_snapshot(iv=0.147, realised=0.147), "call") == []
+
+
+def test_gate_admits_a_spread_with_a_real_premium():
+    [c] = _build_spreads(_snapshot(iv=0.25, realised=0.147), "call")
+    assert c.vrp_edge >= MIN_VRP_EDGE
+
+
+def test_score_rises_with_the_premium_not_with_realised_ev():
+    """Ranking key check: richer implied vol must score higher.
+
+    Structure, width, spread and max_loss are identical across these two, so
+    the premium is the only thing that moves.
+    """
+    lo = _build_spreads(_snapshot(iv=0.20, realised=0.147), "call")[0]
+    hi = _build_spreads(_snapshot(iv=0.28, realised=0.147), "call")[0]
+    assert hi.vrp_edge > lo.vrp_edge
+    assert hi.score > lo.score
+
+
+def test_missing_implied_vol_makes_the_spread_untradable():
+    """No IV means the edge cannot be measured, so there is nothing to rank."""
+    assert _build_spreads(_snapshot(iv=None, realised=0.147), "call") == []

@@ -58,6 +58,13 @@ and pricing one side off delta reported an edge on trades that had none (see
 `docs/writeup.md` §2). Underlyings whose implied vol sits *below* realised
 produce **no candidates at all**.
 
+`vrp_edge` is the **gate and the ranking key**: it must clear $2.00, and the
+shortlist sorts on `vrp_edge / max_loss`. Ranking on real-world EV instead
+would rank on how low the realised-vol estimate happened to land — estimation
+error, not edge. On the last live screen this cut 17 valid spreads to 6, put
+AAPL (implied/realised **1.26**) on top, and had QQQ (**0.894**) sit out
+entirely.
+
 ## Architecture
 
 ```
