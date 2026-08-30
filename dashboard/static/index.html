@@ -64,6 +64,7 @@
   .pill.on   { color: var(--profit); border-color: var(--profit); background: var(--profit-bg); }
   .pill.off  { color: var(--muted); }
   .pill.alert{ color: var(--loss); border-color: var(--loss); background: var(--loss-bg); }
+  .pill.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
   .pill.info { color: var(--accent); border-color: var(--accent); background: var(--accent-dk); }
   .dot {
     width: 6px; height: 6px; border-radius: 50%; background: var(--profit);
@@ -380,13 +381,20 @@ function funnel(runs, decisions, orders) {
   const wanted = runDecisions.filter(d => d.llm_action === "open_spread").length;
   const approved = runDecisions.filter(d => d.risk_approved).length;
   const decisionIds = new Set(runDecisions.map(d => d.id));
-  const placed = orders.filter(o => decisionIds.has(o.decision_id)).length;
+  const attempts = orders.filter(o => decisionIds.has(o.decision_id));
+  const isDry = o => String(o.status || "").toLowerCase() === "dry_run";
+  const isFail = o => String(o.status || "").toLowerCase() === "failed";
+  // A dry run was journaled but never left the machine, so it does not belong
+  // in the "sent to broker" count. Reported separately rather than hidden.
+  const placed = attempts.filter(o => !isDry(o) && !isFail(o)).length;
+  const dry = attempts.filter(isDry).length;
 
   const rows = [
     ["Cleared the edge gate", "spreads with &ge; $2.00 measured premium", shortlisted, ""],
     ["Selected to trade", "the brain picked one, or passed", wanted, "cut"],
     ["Approved by risk", "survived all eight hard gates", approved, "cut"],
-    ["Sent to broker", "atomic multi-leg orders", placed, "done"],
+    ["Sent to broker", dry ? `${dry} dry run${dry === 1 ? "" : "s"} &mdash; journaled, never sent`
+                           : "atomic multi-leg orders", placed, "done"],
   ];
   const max = Math.max(shortlisted, 1);
   $("funnel").innerHTML = rows.map(([label, sub, val, kind]) => `
@@ -469,7 +477,25 @@ function edgeCell(c) {
     + (ivrv ? `<div class="sub">${ivrv}</div>` : "");
 }
 
-function decisions(rows) {
+function orderBadge(o) {
+  if (!o) return "";
+  const s = String(o.status || "").toLowerCase();
+  let pill;
+  if (s === "dry_run")      pill = `<span class="pill warn">dry run &middot; not sent</span>`;
+  else if (s === "failed")  pill = `<span class="pill alert">submit failed</span>`;
+  else if ((o.filled_qty || 0) > 0) pill = `<span class="pill on">filled &times;${o.filled_qty}</span>`;
+  else                      pill = `<span class="pill">${esc(o.status)}</span>`;
+  return `<div style="margin-top:6px">${pill}</div>`;
+}
+
+function decisions(rows, runs, orders) {
+  // A decision that was approved but only ever dry-run must not read as a
+  // live trade - especially on a weekend, when --force was used to test.
+  const runById = new Map((runs || []).map(r => [r.id, r]));
+  const orderFor = new Map();
+  for (const o of (orders || [])) {
+    if (o.decision_id != null && !orderFor.has(o.decision_id)) orderFor.set(o.decision_id, o);
+  }
   if (!rows.length) {
     $("decisions").innerHTML = `<div class="empty"><strong>No decisions recorded yet</strong>
       Run <span class="num">python -m agent.loop</span> to start a cycle.</div>`;
@@ -486,18 +512,21 @@ function decisions(rows) {
         ? `<span class="pill on">approved &times;${d.risk_contracts}</span>`
         : (vetoes.length ? `<span class="pill alert">vetoed</span>`
                          : `<span class="pill off">n/a</span>`);
+      const run = runById.get(d.run_id);
+      const closed = run && !run.market_open
+        ? `<div class="sub" style="color:var(--warn)">market closed</div>` : "";
       const spread = c.short_symbol
         ? `<div class="mono">${esc(c.underlying)} ${esc(c.kind)}</div>
            <div class="sub">${c.short_strike}/${c.long_strike} &middot; ${c.dte}DTE
            &middot; POP ${c.pop} &middot; ${money(c.credit)} credit</div>`
         : `<span class="dim">${NB}</span>`;
       return `<tr>
-        <td class="mono dim">${esc(shortTs(d.ts))}</td>
+        <td class="mono dim">${esc(shortTs(d.ts))}${closed}</td>
         <td>${spread}</td>
         <td>${edgeCell(c)}</td>
         <td class="mono">${esc(d.llm_action || NB)}</td>
         <td class="mono">${d.llm_confidence == null ? NB : Number(d.llm_confidence).toFixed(2)}</td>
-        <td>${gate}</td>
+        <td>${gate}${orderBadge(orderFor.get(d.id))}</td>
         <td class="rationale">${esc(d.llm_rationale)}
           ${vetoes.map(v => `<div class="veto">${esc(v)}</div>`).join("")}
           ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="note">${esc(r)}</div>`).join("") : ""}
@@ -513,7 +542,7 @@ async function refresh() {
       get("summary"), get("equity"), get("positions"),
       get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200")]);
     status(s, r); kpis(s, o); chart(e); funnel(r, d, o);
-    vols(r); positions(p); decisions(d);
+    vols(r); positions(p); decisions(d, r, o);
   } catch (err) { console.error(err); }
 }
 
