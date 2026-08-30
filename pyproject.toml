@@ -1,3 +1,18 @@
+# Without this, pip falls back to setuptools' legacy behaviour and its
+# flat-layout auto-discovery refuses to guess between the top-level
+# directories here (agent, dashboard, journal, site), failing the build with
+# "Multiple top-level packages discovered". Declaring the backend and the
+# package list explicitly is the documented fix.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Only the importable packages. `journal/` is data, `site/` is a build
+# artefact, `scripts/` and `tests/` are run in place, never imported as a
+# library - so none of them belong in the distribution.
+[tool.setuptools]
+packages = ["agent", "dashboard"]
+
 [project]
 name = "vetoed"
 version = "0.1.0"
