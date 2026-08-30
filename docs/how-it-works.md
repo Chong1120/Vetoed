@@ -26,7 +26,8 @@ figure in it is reproducible with `python -m scripts.run_screener`.
 12. [The break-even arithmetic](#12-the-break-even-arithmetic)
 13. [The journal and dashboard](#13-the-journal-and-dashboard)
 14. [What happens when things break](#14-what-happens-when-things-break)
-15. [Known limitations](#15-known-limitations)
+15. [Citation audit](#15-citation-audit)
+16. [Known limitations](#16-known-limitations)
 
 ---
 
@@ -56,17 +57,26 @@ premium**. It does not predict direction.
 
 The reasoning matters, because it rules out the obvious wrong approach:
 
-> Delta is the **risk-neutral** probability of finishing in the money. Under
-> risk-neutral pricing, every fairly-priced option trade has an expected value
-> of exactly **zero**. That is a no-arbitrage identity, not an opinion.
+> Under the **risk-neutral measure**, a fairly-priced trade has an expected
+> P&L of exactly **zero**. That is a no-arbitrage identity, not an opinion.
 
-So any tool that ranks trades by delta-derived expected value is ranking
-**quote noise**. There is no edge in that number by construction.
+So any EV built purely from risk-neutral inputs carries no edge information —
+it can only reflect quoting noise and model error. **The signal has to be a
+difference between two volatility parameterisations, not a level.**
 
-Option selling is profitable for a different reason: risk-neutral
-probabilities systematically **overstate** the real-world chance of large
-moves. Buyers of options pay for insurance, and they overpay. That gap is the
-volatility risk premium, and it is well documented:
+Two things are worth separating carefully here, because it is easy to blur
+them and the earlier version of this document did:
+
+- **Delta is not a probability.** Delta is N(d₁). The risk-neutral probability
+  of finishing in the money is N(d₂) = N(d₁ − σ√T). They are close, but the
+  gap has **opposite sign for calls and puts** (§6).
+- **Option selling is not free money.** The hypothesis is that implied
+  volatility tends to exceed subsequently realised volatility, so a seller is
+  compensated for bearing volatility risk. That is an empirical regularity
+  with an economic rationale — someone is buying insurance — not an
+  arbitrage.
+
+The literature motivating the hypothesis:
 
 - **Bakshi & Kapadia (2003)**, *Review of Financial Studies* 16(2), 527–566.
   Delta-hedged S&P 500 option portfolios underperform zero, the
@@ -76,10 +86,23 @@ volatility risk premium, and it is well documented:
   Variance risk premiums quantified across five stock indices and 35
   individual stocks.
 - **CBOE PUT index**, 30 June 1986 – 31 Dec 2018. Compound return 9.54% versus
-  9.80% for the S&P 500, but standard deviation of only **9.95% versus
-  14.93%** — near-identical return at two-thirds the volatility.
+  9.80% for the S&P 500, at a standard deviation of **9.95% versus 14.93%** —
+  near-identical return at two-thirds the volatility.
 
-The agent's job is therefore narrow and testable: **measure that premium per
+**What this literature does and does not establish.** It supports the
+existence and persistence of a volatility risk premium in equity index
+options. It does **not** validate this agent, and three gaps are worth naming
+before a judge names them:
+
+| | The cited work | What Vetoed does |
+|---|---|---|
+| Instrument | Delta-hedged options; cash-secured ATM puts | Defined-risk vertical credit spreads |
+| Horizon | One month (PUT index); monthly rebalancing | 2–14 DTE |
+| Moneyness | At-the-money | 0.10–0.35 delta, out-of-the-money |
+
+So the papers are the **economic prior**. They are not evidence about this
+strategy, this horizon, or these thresholds. The agent's job is narrow and
+testable on its own terms: **measure the implied-versus-realised gap per
 trade, take the trades where it is large, refuse the trades where it is not.**
 
 ---
@@ -206,8 +229,32 @@ runs against is blocked; the other side stays available.
 | Minimum bid | **$0.10** | **$0.02** | The short leg is sold and must pay real premium. The long leg is insurance we *want* cheap. |
 | Open interest | SPY/QQQ 500 · IWM 250 · AAPL 100 | same | ETFs carry far deeper books; a flat threshold would delete every AAPL candidate. |
 | Bid-ask | `≤ $0.05` **OR** `≤ 10% of mid` | same | A percentage-only test unfairly kills cheap options: $0.05/$0.07 is "33% wide" but costs two cents. |
-| Short delta | 0.10 – 0.35 | — | Bakshi & Kapadia: premium is richer nearer the money. |
+| Short delta | 0.10 – 0.35 | — | Engineering choice. See the provenance table below. |
 | Moneyness | must be OTM | must be further OTM | Defines the risk. |
+
+#### Where each threshold actually comes from
+
+A judge is entitled to ask which of these numbers are derived and which were
+chosen. Honestly labelled:
+
+| Threshold | Value | Provenance |
+|---|---|---|
+| Long leg further OTM | — | **Mathematically required.** Without it the loss is not capped. |
+| `max_loss = width×100 − credit×100` | — | **Mathematically required.** Identity, re-checked by a risk gate. |
+| Short delta band | 0.10–0.35 | **Engineering choice.** Bakshi & Kapadia find delta-hedged underperformance is *less* for away-from-the-money options, which motivates avoiding the far tail — but the paper says nothing about 0.10, or 0.35, or delta bands at all. |
+| DTE | 2–14 | **Contest-design parameter.** Chosen so positions can open and close inside a one-week window, with 0–1 DTE excluded for gamma. |
+| Credit / width | 0.12–0.60 | **Risk-control heuristic.** A sanity band: too low is poor compensation, too high usually means a stale quote or mis-paired strikes. |
+| Open interest floors | 500/500/250/100 | **Liquidity heuristic**, hand-set per underlying because ETFs carry far deeper books than single names. |
+| Bid-ask test | ≤$0.05 **or** ≤10% | **Liquidity heuristic.** The `or` exists because a percentage-only test unfairly kills cheap options. |
+| `MIN_EV_RW` | $1.00 | **Engineering choice.** No derivation. |
+| `MIN_VRP_EDGE` | $2.00 | **Engineering choice**, motivated by the noise in a 20-day vol estimate. No paper prescribes it. |
+| Width preference | 0.80 / 1.00 / 1.00 | **Heuristic.** $1-wide spreads pay too little against two bid-ask crossings. |
+| Risk limits (5% / 25% / 3%) | — | **Risk-control choices.** Conventional, not optimised. |
+
+**None of the numeric thresholds are derived from the cited literature.** The
+literature supports the existence of a volatility premium. Every specific
+number in this system is an engineering decision, and would need out-of-sample
+testing to justify beyond "it is defensible and conservative".
 
 ### 5.3 Building the spread — the worked example
 
@@ -246,19 +293,34 @@ That $100 multiplier is the standard US equity option contract size. The loss
 is capped by construction: the long 305 put pays out below 305, so no matter
 how far AAPL falls, the most this spread can lose is $410.
 
-### 5.4 Probability — one model, two volatilities
+### 5.4 The model, stated precisely
 
-This is the heart of the system. `prob_below()` is a driftless lognormal:
+This is the heart of the system, so it is worth being exact about what is
+assumed. The terminal price is lognormal with **zero drift**:
 
 ```
+ln S_T  ~  Normal( ln S₀ − ½σ²T ,  σ²T )        ⟹   E[S_T] = S₀
+
         ln(K/S) + ½σ²T
 d   =  ─────────────────          P(S_T < K) = N(d)
             σ√T
 ```
 
-Zero drift is deliberate. Assuming a positive equity drift would flatter put
-spreads and penalise call spreads; assuming zero keeps the model
-direction-neutral and slightly conservative for the puts it mostly sells.
+Three consequences, each of which a judge is entitled to ask about:
+
+- **`E[S_T] = S₀` means no rates, no dividends, and no equity risk premium.**
+  We are not claiming the stock has zero expected return; we are declining to
+  take a directional view. On the put side that is the conservative choice —
+  a positive drift would flatter put spreads.
+- **These are model probabilities, not observed frequencies.** `P(S_T < K)` is
+  what a lognormal with the supplied σ implies. Feeding it realised volatility
+  does **not** make it a "real-world probability" — it makes it a
+  *counterfactual valuation* under the same martingale model with a different
+  volatility. This document previously called it real-world. That was wrong on
+  two counts: the drift is not the real-world drift, and the volatility is an
+  estimate rather than a known parameter.
+- **σ is the only thing that changes** between the two valuations below. That
+  is the entire design.
 
 **Time to expiry:**
 
@@ -277,7 +339,7 @@ Implied volatility is higher than realised (23.83% vs 18.91%), so the market
 prices a **larger** chance of breaching the strike than history suggests.
 That difference is exactly what we are being paid for.
 
-### 5.5 Three-point expected value
+### 5.5 Expected value — computed exactly
 
 A vertical credit spread has three payoff regions at expiry:
 
@@ -289,62 +351,108 @@ S_T ≥ 310   (beyond neither strike)   ->  keep the whole credit   +$90.00
 S_T ≤ 305   (beyond both strikes)     ->  full max loss          -$410.00
 ```
 
-The middle band is the one that is easy to get wrong. The payoff there is
-**not** "about half the max loss" — at the short strike the spread still
-expires for the entire credit. Averaging the linear payoff across the band:
+The middle band is where this is easy to get wrong, and where an earlier
+version of this system **was** wrong. The payoff there is not "about half the
+max loss" — at the short strike the spread still expires for the entire
+credit. But nor is it the payoff at the midpoint of the band, which is what
+the earlier code assumed. **That is only correct if `E[S_T | in the band]`
+lands on the arithmetic midpoint, and under a lognormal it does not.**
+
+The ramp is therefore integrated in closed form, using the standard result
 
 ```
-expected payoff between strikes = (max_profit - max_loss) / 2
-                                = (90.00 - 410.00) / 2
-                                = -$160.00
+E[S_T · 1{S_T < K}]  =  S₀ · N( d(K) − σ√T )
 ```
 
-**Real-world EV** (using realised volatility):
+so the whole expectation is **exact** — no quadrature, no midpoint rule:
 
 ```
-p_win     = 1 - 0.18366           = 0.81634  x  +90.00  =  +73.471
-p_partial = 0.18366 - 0.08445     = 0.09921  x -160.00  =  -15.873
-p_maxloss = 0.08445               = 0.08445  x -410.00  =  -34.624
-                                    ────────             ──────────
-                                    1.000000             ev_rw = +$22.97
+ev = max_profit · (1 − N(d_short))                        region 1
+   + 100 · [ (credit − K_short)·(N(d_short) − N(d_long))
+              + S₀·(N(d_short−σ√T) − N(d_long−σ√T)) ]      region 2, the ramp
+   − max_loss · N(d_long)                                  region 3
 ```
 
-**Risk-neutral EV** (using implied volatility, same formula):
+**Valuation A — at 20-day realised volatility (σ = 0.1891):**
 
 ```
-p_win     = 1 - 0.23966           = 0.76034  x  +90.00  =  +68.430
-p_partial = 0.23966 - 0.13925     = 0.10042  x -160.00  =  -16.067
-p_maxloss = 0.13925               = 0.13925  x -410.00  =  -57.090
-                                    ────────             ──────────
-                                    1.000000             ev_rn = -$4.73
+d_short = −0.90152  ->  N = 0.18366        d_long = −1.37576  ->  N = 0.08445
+P(band) = 0.09921                          E[S·1{band}] = 30.5279
+ramp    = 100 · [ (0.90 − 310)·0.09921 + 30.5279 ]  =  −13.7355
+
+ev_rw = 90.00·(1 − 0.18366) − 13.7355 − 410.00·0.08445  =  +$25.11
+pop   = 1 − 0.18366 = 0.8163
 ```
 
-Note the probabilities sum to exactly 1.000000 in both cases — that is an
-invariant pinned by a unit test.
-
-### 5.6 The edge
+**Valuation B — at the short leg's implied volatility (σ = 0.2383):**
 
 ```
-vrp_edge = ev_rw - ev_rn = 22.97 - (-4.73) = +$27.70 per spread
+d_short = −0.70739  ->  N = 0.23966        d_long = −1.08372  ->  N = 0.13925
+ramp    = −14.7340
+
+ev_rn = 90.00·(1 − 0.23966) − 14.7340 − 410.00·0.13925  =  −$3.39
 ```
 
-**Both numbers came from the same model.** The only input that differed was
-the volatility. That is what makes their difference the volatility risk
-premium, rather than an artefact of comparing two different formulas.
+**How wrong was the old midpoint rule?** On this spread it gave $22.97 and
+−$4.73 — errors of −$2.14 and −$1.33. Across a sweep of realistic candidates
+the error had a **median of $0.13** but reached **$37**, and exceeded the
+$2.00 gate in **17% of cases**. It was not a cosmetic inaccuracy; it could
+flip a trade decision. `test_spread_ev_matches_numerical_integration` now
+checks the closed form against a brute-force integral of the payoff across 54
+parameter combinations, and a companion test asserts the old midpoint rule
+would fail by more than the gate threshold.
 
-Two gates apply:
+### 5.6 The signal
 
 ```
-ev_rw    >= $1.00   (MIN_EV_RW)     ->  22.97  PASS
-vrp_edge >= $2.00   (MIN_VRP_EDGE)  ->  27.70  PASS
+vrp_edge = ev_rw − ev_rn = 25.11 − (−3.39) = +$28.51 per spread
 ```
 
-The $2.00 floor exists because below roughly that level, the measured edge
-sits inside the noise of a 20-day realised-volatility estimate. It is not
-evidence of anything.
+**Both numbers came from the same closed form, on the same credit, under the
+same zero-drift model.** The only input that differed was the volatility. That
+is what makes the difference interpretable: it is the P&L attributable purely
+to the implied-versus-realised volatility gap, and it is **exactly zero** when
+the two volatilities agree — pinned to 1e-9 by a test.
 
-**If Alpaca returns no implied volatility for the short leg, the candidate is
-discarded outright.** An edge that cannot be measured cannot be claimed.
+**Two gates apply:**
+
+```
+ev_rw    ≥ $1.00   (MIN_EV_RW)     ->  25.11  PASS
+vrp_edge ≥ $2.00   (MIN_VRP_EDGE)  ->  28.51  PASS
+```
+
+The $2.00 floor is an **engineering choice, not a derived quantity**. Its
+rationale: below roughly that level the measured gap is comparable to the
+noise in a 20-day volatility estimate, so it is not evidence of anything. No
+paper prescribes $2.00.
+
+**Why `ev_rn` is not zero.** Under exact risk-neutral pricing it would be. It
+is not, for three reasons worth stating plainly:
+
+1. **Skew is not modelled.** Both legs are priced at the *short* leg's implied
+   volatility. Real vertical skew means the 305 put trades at a higher IV than
+   the 310 put, so a single-vol model misprices the long leg — here making the
+   observed credit look too small, which pushes `ev_rn` negative.
+2. **The credit comes from mid quotes**, which are not fair value, and on this
+   account are `indicative` rather than true NBBO (§4.2).
+3. **No discounting.** At 2–14 DTE the effect is negligible, but it is an
+   omission, not an absence.
+
+So `ev_rn` should be read as *"what this spread is worth under our model when
+fed the market's own volatility"*, and its distance from zero is a rough
+indicator of how much skew and quote noise the single-vol simplification is
+absorbing. It is not a claim about mispricing.
+
+**And what `vrp_edge` is not.** It is not the variance risk premium of
+Carr & Wu (2009), which is defined on variance swap rates over a matched
+horizon. Ours is a spread-level dollar figure from one quote snapshot under a
+simplified model. The literature explains *why* such a gap should tend to
+exist; it does not certify this estimator. It is an operational screening
+signal with an economic rationale — that is the honest description, and it is
+the one used throughout this document.
+
+**If the short leg has no implied volatility, the candidate is discarded.** A
+signal that cannot be computed cannot be claimed.
 
 ### 5.7 Ranking
 
@@ -353,9 +461,14 @@ worst_spread_pct = max( (3.15-3.05)/3.100, (2.25-2.15)/2.200 )
                  = max( 0.0323, 0.0455 ) = 0.0455
 
 score = (vrp_edge / max_loss) x (1 - worst_spread_pct) x width_preference
-      = (27.70 / 410.00)      x (1 - 0.0455)          x 1.00
-      = 0.0645
+      = (28.51 / 410.00)      x (1 - 0.0455)          x 1.00
+      = 0.0664
 ```
+
+`vrp_edge / max_loss` is dimensionless (dollars per dollar), and the other two
+factors are dimensionless multipliers, so the score is a **dimensionless
+ranking heuristic**. It is not a utility function, a Sharpe ratio, or an
+optimal objective — it is a defensible ordering, and no more than that.
 
 Three factors, each earning its place:
 
@@ -380,18 +493,35 @@ the brain nothing to actually choose between.
 
 ### 5.9 Live output
 
-The last full screen of the four-name universe:
+**Labelled honestly: this is one historical snapshot**, taken 30 Aug 2026 with
+the market closed, so quotes are the last known ones from the `indicative`
+feed. Reproduce the current equivalent with `python -m scripts.run_screener` —
+your numbers will differ, because the market will have moved.
 
-| Underlying | implied/realised | Outcome |
-|---|---|---|
-| **AAPL** | **1.26** | Top two candidates, **+$41.32** and **+$32.30** of edge |
-| SPY | 1.069 | Three candidates, +$4.28 to +$5.43 |
-| IWM | 1.067 | One candidate at +$10.11; three others cut at ~$0 |
-| **QQQ** | **0.894** | **Zero candidates** — implied *below* realised |
+Counted at each gate **within a single snapshot**, which an earlier version of
+this document did not do (it compared a pre-gate count from one run against a
+post-gate count from another):
 
-17 structurally valid spreads were cut to 6 by the premium gate. QQQ sitting
-out is the load-bearing observation: **the agent is not looking for trades, it
-is looking for paid risk, and it declines when nobody is paying.**
+| Underlying | implied/realised | structurally valid | cleared $2.00 | best signal |
+|---|---|---|---|---|
+| **AAPL** | **1.260** | 2 | **2** | **+$42.45** |
+| SPY | 1.069 | 3 | 3 | +$5.44 |
+| IWM | 1.067 | 13 | 2 | +$11.67 |
+| **QQQ** | **0.894** | 2 | **0** | — |
+| **total** | | **20** | **7** | 13 rejected |
+
+Two things to read off it. AAPL, with implied volatility 26% above realised,
+carries by far the largest signal. QQQ, where implied sits *below* realised,
+produces **zero** candidates — its two structurally valid spreads both scored a
+negative gap and were discarded.
+
+**QQQ sitting out is the load-bearing observation.** The agent is not looking
+for trades. It is looking for compensated risk, and it declines when the
+measurement says there is none.
+
+One caveat against over-reading this: 20 spreads on four correlated tickers at
+one instant is an illustration of the mechanism, **not** evidence that the
+mechanism is profitable. See §15.
 
 ---
 
@@ -417,26 +547,26 @@ puts**:
   breach probability.
 - For a **put**, `−d₁ < −d₂`, so `N(−d₁) < N(−d₂)`: delta **understates** it.
 
-On the worked example (a put):
+On the worked example (a put), at the short leg's implied volatility:
 
 ```
-short 310P:  delta = -0.22645   true P(ITM) = 0.23966   gap = 0.01321
-long  305P:  delta = -0.12989   true P(ITM) = 0.13925   gap = 0.00936
+short 310P:  |delta| = N(-d₁) = 0.22645   P(ITM) = N(-d₂) = 0.23966   gap = 0.01321
+long  305P:  |delta| = N(-d₁) = 0.12989   P(ITM) = N(-d₂) = 0.13925   gap = 0.00936
 ```
 
-Feeding those deltas into the same EV formula:
+Because delta *understates* the ITM probability for puts, it made the spread
+look safer than the model says, inflating `ev_rn` and therefore **shrinking**
+the reported gap. On a call spread the sign flips and it **inflates** the gap
+instead.
 
-```
-OLD  ev_rn from delta       = +$0.92   ->  vrp_edge = $22.06
-NEW  ev_rn from implied vol = -$4.73   ->  vrp_edge = $27.70
-```
+The clearest demonstration is journal run 3: IWM traded at implied 14.84%
+against realised 14.58% — a ratio of 1.018, so **essentially no gap existed** —
+and the old code still reported `vrp_edge = 2.75`, of which only about $0.34
+survived once both sides used one model.
 
-Here the old method **understated** the premium by $5.64. On a call spread it
-overstates instead. The clearest demonstration is journal run 3: IWM traded at
-implied 14.84% against realised 14.58% — a ratio of 1.018, meaning
-**essentially no premium was on offer** — and the old code still reported
-`vrp_edge = 2.75`. Of that, **$2.36 was model mismatch and only $0.34 was
-real.**
+That is the failure mode the design now forbids by construction: a signal
+defined as a difference between two runs of *the same function* cannot report
+a gap when its two inputs are equal.
 
 The fix was to price both sides with the same `prob_below()`. Five regression
 tests now pin the invariant, the most important being:
@@ -505,9 +635,22 @@ structured output.
 
 ### What the model sees
 
-Only screener-derived numbers and three account scalars. **Nothing from the
-MCP server or any tool output ever enters the prompt**, which keeps the
-prompt-injection surface at zero by construction.
+Only screener-derived numbers and three account scalars. **No MCP tool output
+enters the prompt.**
+
+The precise claim is worth stating carefully, because "zero prompt-injection
+surface" — which this document used to say — was too strong.
+`screener.screen()` records a failed underlying with its exception message,
+and an Alpaca error string is partly chosen by the server. Forwarding that
+context dict wholesale put externally-influenced text into the prompt.
+
+`build_prompt()` now **whitelists**: it copies across only the numeric fields
+this codebase computed itself, plus the exception *class name*, which comes
+from a fixed vocabulary. The feed name is normalised to `opra` / `indicative`
+/ `unknown`. So the defensible claim is not that there is no attack surface,
+but that every string reaching the model comes from a vocabulary this
+repository controls — and `tests/test_brain.py` attempts to smuggle an
+instruction through the error channel to prove it.
 
 Per candidate:
 
@@ -817,8 +960,8 @@ price improvement.
 
 ## 12. The break-even arithmetic
 
-This section exists because it is the most fragile part of the design and a
-reviewer should see it stated plainly rather than discover it.
+This section exists because it is the most fragile part of the design, and
+because the previous version of it made a comparison that does not hold.
 
 The exit rules define a fixed reward-to-risk ratio, independent of which
 spread is chosen:
@@ -839,23 +982,44 @@ break-even win rate = 4 / (1 + 4) = 80.0%
 | 65% of credit | −2.0× credit | 1 : 3.08 | 75.5% |
 | 75% of credit | −2.0× credit | 1 : 2.67 | 72.7% |
 
-The modelled real-world probability of profit on the worked example is
-**81.6%**, against a break-even requirement of **80.0%**. That is a thin
-margin.
+### The comparison this document used to make, and why it was wrong
 
-Two things work in the strategy's favour and are not captured by that simple
-comparison:
+An earlier version placed the modelled **81.6% probability of profit** next to
+the **80.0% break-even win rate** and called the margin thin. That comparison
+is not valid, because the two numbers describe different events:
 
-- Taking profit at 50% **raises the realised win rate above the
-  hold-to-expiry POP**, because the position is closed before it has time to
-  move against you.
-- The delta stop and the 1-DTE exit both cut trades that would otherwise have
-  time to become max losses.
+| | What it actually is |
+|---|---|
+| `pop` = 81.6% | P(short strike not breached **at expiry**), under the model at realised vol. A property of the **terminal** distribution, assuming the position is **held to expiry**. |
+| 80.0% break-even | The win rate a **binary** bet would need, if every trade ended at either +0.50×credit or −2.0×credit. |
 
-But the honest conclusion stands: **the current take-profit and stop-loss pair
-is the single most sensitive parameter choice in the system.** Loosening the
-stop to −1.5× credit would drop the break-even requirement to 75% and provide
-meaningfully more cushion, at the cost of larger individual losses.
+Neither assumption holds. The position is rarely held to expiry — that is the
+entire purpose of the exit rules. And the outcome is **not binary**: a cycle
+can end at the take-profit, at the stop, at the delta stop, or at the 1-DTE
+close, and the last two land at essentially arbitrary intermediate P&L.
+
+Computing P(take-profit before stop) correctly is a **first-passage problem**
+on the spread's mark-to-market value, not a question about the terminal price
+distribution. This system does not compute it, and `pop` is not an estimate of
+it. Nothing in the codebase claims otherwise; only this document did.
+
+### What can honestly be said
+
+- The exit rules commit to a **1:4 reward-to-risk** shape. That demands a high
+  hit rate, and it is a deliberate choice, not an accident.
+- Taking profit at 50% **truncates the holding period**, which mechanically
+  raises the realised win rate above the hold-to-expiry `pop` — you close
+  before the distribution has time to widen. By how much is not modelled here.
+- The stop, the delta stop, and the 1-DTE close all cut trades that would
+  otherwise have had time to become max losses.
+- **Whether the net of those effects clears 80% is an empirical question this
+  project has not answered**, and 10–20 contest trades cannot answer it (§15).
+
+The take-profit and stop-loss pair is therefore the **most sensitive
+unvalidated parameter choice in the system.** Moving the stop to −1.5× credit
+would drop the break-even requirement to 75%. That has not been changed,
+because changing a risk parameter to make the arithmetic look friendlier —
+without evidence — would be exactly the wrong response to noticing this.
 
 ---
 
@@ -910,7 +1074,30 @@ from, and the implied-versus-realised volatility beneath it.
 
 ---
 
-## 15. Known limitations
+## 15. Citation audit
+
+Every academic claim this project makes, checked against what the source
+actually establishes.
+
+| Claim as stated | Source | What the source actually establishes | Verdict |
+|---|---|---|---|
+| Delta-hedged S&P 500 option portfolios underperform zero; underperformance is greater at higher volatility | Bakshi & Kapadia (2003), *RFS* 16(2), 527–566 | Exactly this, plus: underperformance is **less** for away-from-the-money options. Evidence for a negative market volatility risk premium. | **Supported.** Volume, issue, pages verified. |
+| Variance risk premiums quantified across 5 indices and 35 stocks | Carr & Wu (2009), *RFS* 22(3), 1311–1341 | Exactly this. Defines the premium via **variance swap rates** over a matched horizon. | **Supported**, but note the definition differs from our `vrp_edge` (§5.6). |
+| CBOE PUT index: 9.95% vol vs 14.93% for the S&P 500 at near-identical return, Jun 1986–Dec 2018 | CBOE / Bondarenko (2019) | Figures verified. The index sells **one-month at-the-money cash-secured puts**, rolled monthly. | **Supported as stated** — but a different instrument and horizon from what we trade. Was previously cited without that caveat. |
+| "Premium is richer nearer the money", used to justify a 0.10–0.35 delta band | Bakshi & Kapadia (2003) | Supports the *direction* (less underperformance away from the money). Says nothing about delta bands or these specific values. | **Was too strong.** Now labelled an engineering choice (§5.2). |
+| `vrp_edge` is "the volatility risk premium" | — | No source defines the premium as a spread-level dollar EV difference under a single-vol lognormal. | **Was too strong.** Now described as an operational signal with an economic rationale (§5.6). |
+| "Delta is the risk-neutral probability of finishing in the money" | — | False. Delta is N(d₁); risk-neutral P(ITM) is N(d₂). | **Was wrong.** Corrected throughout; §6 explains the sign flip between calls and puts. |
+| Alpaca `mleg` order structure, 2–4 legs, `position_intent` per leg | Alpaca options docs | Matches the implementation exactly. Paper accounts get Level 3 by default. | **Supported.** |
+| MCP tool `place_option_order` and its parameters | Installed server, queried directly | v3.4.7, 72 tools; schema accepts exactly the parameters sent. | **Supported**, verified against the running server rather than the docs. |
+
+**Nothing in the literature validates this strategy, this horizon, or these
+thresholds.** The papers establish that a volatility risk premium exists and
+persists in equity index options. Everything between that prior and this
+implementation is our own engineering, and is presented as such.
+
+---
+
+## 16. Known limitations
 
 Stated here rather than left for a reviewer to find.
 
@@ -923,8 +1110,10 @@ every calculation in this document.
 spreads the shortlist across SPY, QQQ, IWM and AAPL, but all four are US
 equity beta. It diversifies across *tickers*, not across *risk factors*.
 
-**Selection bias on the volatility estimate.** A 20-day realised-vol estimate
-carries roughly 16% relative standard error, and `ev_rw` falls as that
+**Selection bias on the volatility estimate.** Under a normal-iid assumption a
+20-day realised-vol estimate carries roughly 16% relative standard error —
+`1/sqrt(2(n−1))` with n = 20 returns, an asymptotic result that real
+fat-tailed, vol-clustered returns make optimistic. `ev_rw` falls as that
 estimate rises. Filtering on measured edge therefore preferentially selects
 names whose realised volatility is *currently underestimated*. Gating on the
 premium rather than on real-world EV substantially reduces this, because a
@@ -933,6 +1122,27 @@ does not eliminate it.
 
 **The lognormal model underestimates tails.** Real equity returns are
 fat-tailed. `P(max loss)` is therefore biased low, which biases every EV high.
+Both valuations share the bias so it partly cancels in `vrp_edge`, but not
+exactly — the two are evaluated at different volatilities.
+
+**Vertical skew is not modelled.** Both legs are priced at the short leg's
+implied volatility. Real skew means the further-OTM long leg usually trades at
+a higher IV, so `ev_rn` absorbs that mispricing rather than isolating
+volatility (§5.6). This is the largest *modelling* simplification in the
+system, as distinct from the largest *data* limitation, which is the feed.
+
+**`vrp_edge` is a screening signal, not a measured risk premium.** It is a
+dollar figure from one quote snapshot under a single-vol zero-drift lognormal.
+It is not the variance risk premium of the literature (§5.6), and it has not
+been validated out-of-sample.
+
+**The 20-day realised volatility is an estimator, not a forecast.** It is
+computed from 20 daily closes and used as though it described volatility over
+a 2–14 day horizon. The horizons are deliberately not matched (§9).
+
+**The take-profit and stop-loss pair is unvalidated.** It commits to a 1:4
+reward-to-risk shape, and whether the realised win rate clears the implied
+break-even is an open empirical question (§12).
 
 **Fixed dollar widths across different price levels.** `WIDTHS = [1, 2, 5]` is
 in dollars while SPY trades near $770 and IWM near $296. A $1-wide spread is
@@ -953,7 +1163,7 @@ ever tighten.
 ## Appendix — reproducing every number here
 
 ```bash
-python -m pytest -q                  # 77 tests
+python -m pytest -q                  # 144 tests
 python -m scripts.run_screener       # live screen, read-only
 python -m agent.loop --force         # one dry-run cycle, market closed
 uvicorn dashboard.api:app --port 8000

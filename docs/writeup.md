@@ -24,75 +24,93 @@ one of the better-documented anomalies in empirical finance:
 |---|---|
 | **Bakshi & Kapadia (2003)**, *Review of Financial Studies* 16(2), 527–566 | Delta-hedged S&P 500 option portfolios **underperform zero**; underperformance is greater at higher volatility. Option *sellers* are compensated. |
 | **Carr & Wu (2009)**, *RFS* 22(3), 1311–1341 | Variance risk premiums quantified across 5 indices and 35 individual stocks. |
-| **CBOE PUT Index** (June 1986 onward) | Put-writing: **9.9%** annualised volatility vs **14.9%** for the S&P 500, with higher Sharpe and Sortino ratios over 32.5 years. |
+| **CBOE PUT Index** (Jun 1986–Dec 2018) | One-month **at-the-money cash-secured** put writing: 9.54% return at **9.95%** volatility, vs 9.80% at **14.93%** for the S&P 500. |
 
-The distinction from technical-indicator strategies matters:
-**we harvest a risk premium, we do not make a prediction.** A premium exists
-because someone is paying for insurance — it does not require the market to be
-inefficient.
+**What these do and do not establish.** They support the existence and
+persistence of a volatility risk premium in equity index options. They do
+**not** validate this agent. The PUT index in particular is a different
+instrument on a different horizon — at-the-money cash-secured puts rolled
+monthly, versus the 2–14 DTE out-of-the-money defined-risk spreads traded
+here. It is the economic prior, not evidence about this strategy.
+
+The distinction from technical-indicator strategies still matters:
+**we aim to be paid for carrying volatility risk, not to predict direction.**
+A premium can exist because someone is buying insurance — it does not require
+the market to be inefficient.
 
 ## 2. The measurement that makes the edge explicit
 
-Most retail options tooling ranks trades by delta-derived probability. **That is
-mathematically empty.** Delta is the *risk-neutral* probability of finishing
-in-the-money, and under risk-neutral pricing every fairly-priced option trade
-has an expected value of exactly **zero** — a no-arbitrage identity.
+Under the risk-neutral measure a fairly-priced trade has an expected P&L of
+exactly **zero** — a no-arbitrage identity. So an EV built purely from
+risk-neutral inputs cannot contain edge information. **The signal must be a
+difference between two volatility parameterisations, not a level.**
 
-So `screener.py` computes EV under **two different probability measures**:
+Everything runs through **one model**: a zero-drift lognormal with
+`E[S_T] = S₀` — no rates, no dividends, and deliberately no equity risk
+premium. **Volatility is the only input that changes.**
 
-| Quantity | Measure | Source |
+| Quantity | Volatility fed in | What it estimates |
 |---|---|---|
-| Credit received | risk-neutral | the market quote (contains the premium) |
-| `ev_rn` | risk-neutral | the market's own **implied** volatility |
-| `ev_rw` | **real-world** | 20-day **realised** volatility |
+| Credit received | — | taken from the market quote, identical on both sides |
+| `ev_rn` | short leg's **implied** vol | approximately how the market values this spread |
+| `ev_rw` | 20-day **realised** vol | what it would be worth if vol matched recent history |
+| **`vrp_edge`** | — | **`ev_rw − ev_rn`** — the volatility gap, in dollars |
+
+The expected payoff is computed in **closed form, exactly** — not approximated:
 
 ```
-p(keep credit)  = 1 − P(short strike breached)
-p(partial loss) = P(short breached) − P(long breached)
-p(max loss)     = P(long strike breached)
+payoff:  +max_profit          beyond the short strike
+         linear ramp          between the strikes
+         −max_loss            beyond the long strike
 
-between the strikes the payoff runs linearly +max_profit → −max_loss,
-so its expectation is (max_profit − max_loss) / 2
-
-ev_rn  ← that spread priced at IMPLIED vol
-ev_rw  ← that spread priced at REALISED vol
-vrp_edge = ev_rw − ev_rn  ← implied-minus-realised, in dollars
-                            THIS is the gate and the ranking key
+the ramp is integrated analytically using
+    E[S_T · 1{S_T < K}] = S₀ · N(d(K) − σ√T)
 ```
 
-**One model, one variable — and that is a correction.** Both EVs run through
-the same lognormal; the only input that differs is the volatility. An earlier
-build computed `ev_rn` from *delta* instead. Delta is N(d₁), while the
-probability of finishing in the money is N(d₂); the two differ by roughly
-σ√T, which at 12 DTE is worth several dollars of EV — more than the $1.00
-acceptance threshold itself. The metric therefore reported a premium where
-none existed. Journal run 3 traded IWM at implied 14.84% against realised
-14.58% — a ratio of 1.018, meaning essentially **no** premium was on offer —
-and still printed `vrp_edge = 2.75`. Of that, $2.36 was model mismatch. Priced
-through one model it reads **$0.34**.
+**Two corrections got us here, and both changed decisions.**
 
-Nine tests in `test_screener_math.py` now pin the invariant that would have
-caught it: equal implied and realised must yield **zero** edge, implied *below*
-realised must yield a **negative** one, and delta must not be mistaken for a
-probability.
+*First,* an earlier build computed `ev_rn` from **delta**. Delta is N(d₁);
+the risk-neutral probability of finishing ITM is N(d₂). They differ by roughly
+σ√T — and the gap has **opposite sign for calls and puts**, so it biased the
+two sides of the book in opposite directions. Journal run 3 traded IWM at
+implied 14.84% against realised 14.58% — a ratio of 1.018, so essentially no
+gap existed — and still printed `vrp_edge = 2.75`.
 
-**The premium is the gate, not a footnote.** `vrp_edge` must clear $2.00 or the
+*Second,* the ramp between the strikes was valued at its **midpoint payoff**,
+`(max_profit − max_loss) / 2`. That is only correct if `E[S_T | in the band]`
+lands on the arithmetic midpoint, which a lognormal does not do. Across a
+sweep of realistic candidates the error had a median of $0.13 but reached
+**$37**, and exceeded the $2.00 gate in **17%** of cases — large enough to
+flip trade decisions, not merely to misreport them.
+
+Both are now pinned by tests. The decisive one checks the closed form against
+a brute-force numerical integral of the payoff; the old midpoint rule fails it
+by more than the gate threshold.
+
+**The signal is the gate, not a footnote.** `vrp_edge` must clear $2.00 or the
 spread is discarded, and the shortlist is ranked on `vrp_edge / max_loss` — not
-on `ev_rw`. Ranking on real-world EV ranks on how *low* the 20-day realised-vol
-estimate happened to come in, which is estimation error (that estimate carries
-~16% relative standard error) rather than an edge anyone is paying for. A
-spread whose implied vol is unavailable is dropped outright: an edge that
-cannot be measured cannot be claimed.
+on `ev_rw`. Ranking on `ev_rw` ranks on how *low* the 20-day realised-vol
+estimate happened to come in, which is estimation error rather than
+compensation. (Under a normal-iid assumption that estimate carries roughly 16%
+relative standard error; real returns are fat-tailed and vol-clustered, so the
+true figure is worse.) A spread whose implied vol is unavailable is dropped
+outright: a signal that cannot be computed cannot be claimed.
 
-The live screen shows the discipline working. Of 17 structurally valid spreads,
-**11 were rejected for carrying no measurable premium**:
+One snapshot, counted at each gate — **20 structurally valid spreads, 13
+rejected for carrying no measurable gap**. (This is a *historical* snapshot,
+30 Aug 2026, market closed. Reproduce the current equivalent with
+`python -m scripts.run_screener`; the numbers will differ.)
 
-| Underlying | implied / realised | Result |
-|---|---|---|
-| AAPL | **1.26** | top two candidates, **+$41.32** and **+$32.30** of edge |
-| SPY | 1.069 | three candidates, +$4.28 to +$5.43 |
-| IWM | 1.067 | one candidate at +$10.11; three others cut at ~$0 |
-| QQQ | **0.894** | **zero candidates** — implied *below* realised, so it sits out |
+| Underlying | implied / realised | valid | cleared $2.00 | best signal |
+|---|---|---|---|---|
+| AAPL | **1.260** | 2 | **2** | **+$42.45** |
+| SPY | 1.069 | 3 | 3 | +$5.44 |
+| IWM | 1.067 | 13 | 2 | +$11.67 |
+| QQQ | **0.894** | 2 | **0** | — |
+| **total** | | **20** | **7** | |
+
+QQQ is the one to look at: implied volatility *below* realised, so both its
+structurally valid spreads scored a negative gap and neither was taken.
 
 ## 3. Architecture
 
@@ -133,7 +151,7 @@ not of whether the model answered.
 1 DTE, or **short-leg delta doubling** — an early warning that converts some
 max-losses into partial losses.
 
-**68 tests**, covering every gate that must never fail open: missing long leg,
+**144 tests**, covering every gate that must never fail open: missing long leg,
 long strike on the wrong side, tampered `max_loss`, flipped legs, and the model
 attempting to influence size.
 
@@ -160,7 +178,12 @@ reckless.
   would leave a naked short between fills.
 - **`alpaca-py`** for bulk chain/Greeks screening — ~1,800 contracts per
   underlying per cycle, impractical as individual tool calls.
-- **Prompt-injection surface: zero.** The MCP server marks responses
+- **Prompt boundary, enforced by a whitelist.** No MCP output reaches the
+  model, and `build_prompt()` copies across only numbers this codebase
+  computed plus an exception class name — because a data-provider error string
+  would otherwise have reached the prompt. Not "zero attack surface"; a
+  controlled vocabulary, with a test that attempts to smuggle an instruction
+  through. Separately, the MCP server marks responses
   `"trust": "untrusted_tool_output"`. Tool output is parsed for structured
   fields and never enters the model's context.
 - **Paper-only**, asserted at every entry point.

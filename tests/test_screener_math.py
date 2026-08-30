@@ -1,14 +1,64 @@
-"""Probability and EV maths. The dual-measure design is the core claim."""
+"""Probability and expected-value maths.
+
+The dual-valuation design is the project's central claim, so these tests are
+written to falsify it rather than to confirm it. The most important one is
+`test_spread_ev_matches_numerical_integration`: it checks the closed form
+against a brute-force integral of the actual payoff, which is the only way to
+know the analytic shortcut is right rather than merely plausible.
+"""
 
 import math
+from datetime import date, datetime
 
 import pytest
 
-from datetime import date, datetime
-
 from agent.data import MarketSnapshot, OptionRow
-from agent.screener import (MIN_VRP_EDGE, _build_spreads, _three_point_ev,
-                            norm_cdf, prob_below)
+from agent.screener import (MIN_VRP_EDGE, _build_spreads, _d, norm_cdf,
+                            prob_below, spread_ev)
+
+
+# --------------------------------------------------------------------------- #
+# reference implementations - deliberately dumb, so they can disagree
+# --------------------------------------------------------------------------- #
+
+def payoff(spot_at_expiry: float, k_short: float, k_long: float,
+           credit: float, right: str) -> float:
+    """The contract, written out literally. No probability involved."""
+    width = abs(k_short - k_long)
+    max_profit = credit * 100.0
+    max_loss = width * 100.0 - max_profit
+    s = spot_at_expiry
+    if right == "put":
+        if s >= k_short:
+            return max_profit
+        if s <= k_long:
+            return -max_loss
+        return 100.0 * (credit - (k_short - s))
+    if s <= k_short:
+        return max_profit
+    if s >= k_long:
+        return -max_loss
+    return 100.0 * (credit - (s - k_short))
+
+
+def ev_by_integration(spot, k_short, k_long, credit, vol, years, right,
+                      steps=200000) -> float:
+    """E[payoff] by trapezoidal integration over the lognormal density.
+
+    Slow and obvious on purpose. If the closed form in screener.py ever drifts
+    from the payoff it claims to price, this disagrees.
+    """
+    sd = vol * math.sqrt(years)
+    mean = math.log(spot) - 0.5 * vol * vol * years
+    lo, hi = mean - 8 * sd, mean + 8 * sd
+    h = (hi - lo) / steps
+    total = 0.0
+    for i in range(steps + 1):
+        x = lo + i * h
+        pdf = math.exp(-0.5 * ((x - mean) / sd) ** 2) / (sd * math.sqrt(2 * math.pi))
+        weight = 0.5 if i in (0, steps) else 1.0
+        total += weight * payoff(math.exp(x), k_short, k_long, credit, right) * pdf * h
+    return total
 
 
 # --------------------------------------------------------------------------- #
@@ -28,32 +78,23 @@ def test_norm_cdf_is_monotonic():
 
 
 # --------------------------------------------------------------------------- #
-# real-world probability
+# the lognormal
 # --------------------------------------------------------------------------- #
 
-def test_atm_probability_is_near_half():
-    """At the money with tiny drift, P(below) should sit just above 0.5."""
-    p = prob_below(spot=100.0, strike=100.0, vol=0.20, years=30 / 365)
-    assert 0.50 <= p <= 0.53
-
-
 def test_further_otm_is_less_likely():
-    """A strike further below spot must be less likely to be breached."""
     near = prob_below(100.0, 97.0, 0.20, 30 / 365)
     far = prob_below(100.0, 90.0, 0.20, 30 / 365)
     assert far < near < 0.5
 
 
 def test_higher_vol_raises_breach_probability():
-    calm = prob_below(100.0, 95.0, 0.10, 30 / 365)
-    wild = prob_below(100.0, 95.0, 0.40, 30 / 365)
-    assert wild > calm
+    assert prob_below(100.0, 95.0, 0.40, 30 / 365) > \
+           prob_below(100.0, 95.0, 0.10, 30 / 365)
 
 
 def test_more_time_raises_breach_probability():
-    short = prob_below(100.0, 95.0, 0.20, 2 / 365)
-    long = prob_below(100.0, 95.0, 0.20, 60 / 365)
-    assert long > short
+    assert prob_below(100.0, 95.0, 0.20, 60 / 365) > \
+           prob_below(100.0, 95.0, 0.20, 2 / 365)
 
 
 def test_degenerate_inputs_return_nan():
@@ -62,78 +103,217 @@ def test_degenerate_inputs_return_nan():
         assert math.isnan(prob_below(*args))
 
 
+def test_model_is_zero_drift_so_expected_terminal_price_is_spot():
+    """The stated assumption: E[S_T] = S_0. No drift, no equity risk premium.
+
+    If this ever fails, every probability in the system has quietly acquired a
+    directional view that the documentation does not admit to.
+    """
+    spot, vol, years = 100.0, 0.25, 0.5
+    sd = vol * math.sqrt(years)
+    mean = math.log(spot) - 0.5 * vol * vol * years
+    # E[S_T] = exp(mean + sd^2/2)
+    assert math.exp(mean + 0.5 * sd * sd) == pytest.approx(spot, rel=1e-12)
+
+
 # --------------------------------------------------------------------------- #
-# three-point EV
+# THE load-bearing test: is the closed form actually exact?
 # --------------------------------------------------------------------------- #
 
-def test_ev_positive_when_breach_unlikely():
-    ev, pop = _three_point_ev(0.10, 0.05, max_profit=120.0, max_loss=380.0)
-    assert pop == pytest.approx(0.90)
-    assert ev > 0
+@pytest.mark.parametrize("right,k_short,k_long,spot", [
+    ("put", 310.0, 305.0, 319.92),
+    ("put", 758.0, 757.0, 769.28),
+    ("put", 300.0, 295.0, 305.00),
+    ("call", 300.0, 301.0, 295.73),
+    ("call", 723.0, 728.0, 716.91),
+    ("call", 110.0, 112.0, 100.00),
+])
+@pytest.mark.parametrize("vol", [0.10, 0.22, 0.45])
+@pytest.mark.parametrize("dte", [2, 7, 14])
+def test_spread_ev_matches_numerical_integration(right, k_short, k_long,
+                                                 spot, vol, dte):
+    """The closed form must equal a brute-force integral of the payoff.
+
+    This is what entitles the documentation to call the expected value exact
+    rather than approximate. A midpoint rule over the strike band - which is
+    what this code used to do - fails this by tens of dollars on wide spreads.
+    """
+    credit = 0.25 * abs(k_short - k_long)
+    years = dte / 365.0
+    ev, _ = spread_ev(spot, k_short, k_long, credit, vol, years, right)
+    ref = ev_by_integration(spot, k_short, k_long, credit, vol, years, right,
+                            steps=60000)
+    assert ev == pytest.approx(ref, abs=0.02)
 
 
-def test_ev_negative_when_breach_likely():
-    ev, pop = _three_point_ev(0.60, 0.50, max_profit=120.0, max_loss=380.0)
-    assert pop == pytest.approx(0.40)
-    assert ev < 0
+def test_midpoint_approximation_would_have_failed_that_test():
+    """Documents why the exact form was worth the extra lines.
+
+    The old implementation valued the ramp between the strikes at its midpoint
+    payoff, (max_profit - max_loss) / 2. That is only correct when
+    E[S_T | in the band] lands on the arithmetic midpoint, which a lognormal
+    does not do. Here that error is far larger than MIN_VRP_EDGE, so it could
+    change a trade decision rather than just a displayed number.
+    """
+    spot, k_short, k_long, credit, vol, years = 319.92, 310.0, 305.0, 0.90, 0.1891, 12 / 365
+    exact, _ = spread_ev(spot, k_short, k_long, credit, vol, years, "put")
+
+    max_profit = credit * 100.0
+    max_loss = 5.0 * 100.0 - max_profit
+    p_short = prob_below(spot, k_short, vol, years)
+    p_long = prob_below(spot, k_long, vol, years)
+    midpoint = (max_profit * (1 - p_short)
+                + (p_short - p_long) * (max_profit - max_loss) * 0.5
+                - p_long * max_loss)
+
+    assert abs(exact - midpoint) > MIN_VRP_EDGE
 
 
-def test_ev_decreases_as_breach_probability_rises():
-    evs = [_three_point_ev(p, p * 0.6, 120.0, 380.0)[0]
-           for p in (0.10, 0.20, 0.30, 0.40)]
+# --------------------------------------------------------------------------- #
+# payoff bounds and limiting behaviour
+# --------------------------------------------------------------------------- #
+
+def test_payoff_regions_are_correct():
+    """Above, between, and below the strikes, for both orientations."""
+    # put credit 310/305 at $0.90: max profit $90, max loss $410
+    assert payoff(330.0, 310.0, 305.0, 0.90, "put") == pytest.approx(90.0)
+    assert payoff(310.0, 310.0, 305.0, 0.90, "put") == pytest.approx(90.0)
+    assert payoff(307.5, 310.0, 305.0, 0.90, "put") == pytest.approx(-160.0)
+    assert payoff(305.0, 310.0, 305.0, 0.90, "put") == pytest.approx(-410.0)
+    assert payoff(290.0, 310.0, 305.0, 0.90, "put") == pytest.approx(-410.0)
+    # call credit 300/305 at $0.90 mirrors it
+    assert payoff(280.0, 300.0, 305.0, 0.90, "call") == pytest.approx(90.0)
+    assert payoff(302.5, 300.0, 305.0, 0.90, "call") == pytest.approx(-160.0)
+    assert payoff(320.0, 300.0, 305.0, 0.90, "call") == pytest.approx(-410.0)
+
+
+def test_expiry_breakeven_is_short_strike_offset_by_the_credit():
+    """Put spread breaks even at K_short - credit, call spread at K_short + credit.
+
+    abs=1e-9 rather than the default: 310.0 - 0.90 is not exactly 309.1 in
+    binary floating point, and the residue is ~2e-12, which is larger than
+    pytest's default absolute tolerance against zero.
+    """
+    assert payoff(310.0 - 0.90, 310.0, 305.0, 0.90, "put") == pytest.approx(0.0, abs=1e-9)
+    assert payoff(300.0 + 0.90, 300.0, 305.0, 0.90, "call") == pytest.approx(0.0, abs=1e-9)
+
+
+def test_max_loss_is_width_times_100_minus_credit_times_100():
+    credit, width = 0.90, 5.0
+    assert payoff(0.0, 310.0, 305.0, credit, "put") == \
+        pytest.approx(-(width * 100.0 - credit * 100.0))
+
+
+def test_ev_is_bounded_by_the_payoff_extremes():
+    """An expected value cannot exceed the best or worst possible outcome."""
+    for right, ks, kl, spot in (("put", 310.0, 305.0, 319.92),
+                                ("call", 300.0, 305.0, 295.0)):
+        for vol in (0.05, 0.20, 0.80):
+            ev, _ = spread_ev(spot, ks, kl, 1.25, vol, 10 / 365, right)
+            assert -(5.0 * 100.0 - 125.0) - 1e-6 <= ev <= 125.0 + 1e-6
+
+
+def test_vanishing_vol_converges_to_the_full_credit():
+    """With no volatility the OTM spread expires worthless and we keep it all."""
+    ev, pop = spread_ev(319.92, 310.0, 305.0, 0.90, 1e-6, 12 / 365, "put")
+    assert ev == pytest.approx(90.0, abs=0.01)
+    assert pop == pytest.approx(1.0, abs=1e-6)
+
+
+def test_ev_falls_monotonically_as_volatility_rises():
+    """For a fixed credit, more volatility can only make a short spread worse."""
+    evs = [spread_ev(319.92, 310.0, 305.0, 0.90, v, 12 / 365, "put")[0]
+           for v in (0.05, 0.15, 0.25, 0.40, 0.80)]
     assert evs == sorted(evs, reverse=True)
 
 
-def test_probabilities_are_coherent():
-    """win + partial + maxloss must sum to 1."""
-    p_short, p_long = 0.30, 0.18
-    _, p_win = _three_point_ev(p_short, p_long, 120.0, 380.0)
-    p_partial = p_short - p_long
-    assert p_win + p_partial + p_long == pytest.approx(1.0)
+def test_extreme_vol_converges_to_the_max_loss_for_a_put_spread():
+    """The limit, and a note on how slowly it arrives.
 
-
-def test_long_delta_above_short_does_not_produce_negative_probability():
-    """Malformed input must not silently create impossible probabilities."""
-    ev, pop = _three_point_ev(0.20, 0.35, 120.0, 380.0)
-    assert not math.isnan(ev)
-    assert 0.0 <= pop <= 1.0
-
-
-# --------------------------------------------------------------------------- #
-# the point of the whole design
-# --------------------------------------------------------------------------- #
-
-def test_real_world_beats_risk_neutral_when_iv_exceeds_realised():
-    """The volatility risk premium, expressed as code.
-
-    Implied vol 20% (what we are paid on) versus realised 12% (what actually
-    happens). The real-world EV must exceed the risk-neutral EV - that gap is
-    the premium documented by Bakshi & Kapadia (2003) and Carr & Wu (2009).
+    d_short = (ln(K/S) + sigma^2.T/2) / (sigma.sqrt(T)) -> sigma.sqrt(T)/2,
+    so N(d_short) -> 1 and the EV tends to -max_loss. It gets there slowly:
+    at 1200% vol the right tail still carries 14% of the mass and the EV is
+    only -339. The convergence needs a genuinely absurd volatility, which is
+    why this test uses one.
     """
-    spot, short_k, long_k = 100.0, 95.0, 90.0
-    years = 7 / 365
+    ev, pop = spread_ev(319.92, 310.0, 305.0, 0.90, 100.0, 12 / 365, "put")
+    assert ev == pytest.approx(-410.0, abs=0.5)
+    assert pop < 1e-6
 
-    p_short_rn = prob_below(spot, short_k, 0.20, years)   # implied
-    p_long_rn = prob_below(spot, long_k, 0.20, years)
-    p_short_rw = prob_below(spot, short_k, 0.12, years)   # realised
-    p_long_rw = prob_below(spot, long_k, 0.12, years)
 
-    ev_rn, _ = _three_point_ev(p_short_rn, p_long_rn, 120.0, 380.0)
-    ev_rw, _ = _three_point_ev(p_short_rw, p_long_rw, 120.0, 380.0)
+def test_pop_is_the_probability_the_short_strike_survives():
+    spot, ks, kl, vol, years = 319.92, 310.0, 305.0, 0.1891, 12 / 365
+    _, pop = spread_ev(spot, ks, kl, 0.90, vol, years, "put")
+    assert pop == pytest.approx(1.0 - prob_below(spot, ks, vol, years))
 
-    assert p_short_rw < p_short_rn      # realised implies a safer world
-    assert ev_rw > ev_rn                # so the trade is worth more
+
+def test_three_region_probabilities_sum_to_one():
+    spot, ks, kl, vol, years = 319.92, 310.0, 305.0, 0.1891, 12 / 365
+    p_win = 1.0 - prob_below(spot, ks, vol, years)
+    p_band = prob_below(spot, ks, vol, years) - prob_below(spot, kl, vol, years)
+    p_maxloss = prob_below(spot, kl, vol, years)
+    assert p_win + p_band + p_maxloss == pytest.approx(1.0)
 
 
 # --------------------------------------------------------------------------- #
-# regression: vrp_edge must measure the PREMIUM, not the model mismatch
+# delta is not a probability
 # --------------------------------------------------------------------------- #
 
-def _chain(iv: float):
+def _bs_delta_and_itm(spot, strike, vol, years, right):
+    """(|delta|, risk-neutral P(finish ITM)) under the same zero-drift model."""
+    sd = vol * math.sqrt(years)
+    d1 = (math.log(spot / strike) + 0.5 * vol * vol * years) / sd
+    d2 = d1 - sd
+    if right == "call":
+        return norm_cdf(d1), norm_cdf(d2)
+    return norm_cdf(-d1), norm_cdf(-d2)
+
+
+def test_call_delta_overstates_the_itm_probability():
+    """delta = N(d1), P(ITM) = N(d2), and d1 > d2, so delta is the larger."""
+    delta, p_itm = _bs_delta_and_itm(295.73, 300.0, 0.25, 12 / 365, "call")
+    assert delta > p_itm
+    assert delta - p_itm > 0.005
+
+
+def test_put_delta_understates_the_itm_probability():
+    """|put delta| = N(-d1) and P(ITM) = N(-d2); -d1 < -d2, so delta is smaller.
+
+    The sign of the error flips between calls and puts. That is exactly why
+    substituting delta for a probability is not a harmless simplification -
+    it biases call spreads and put spreads in opposite directions.
+    """
+    delta, p_itm = _bs_delta_and_itm(319.92, 310.0, 0.2383, 12 / 365, "put")
+    assert delta < p_itm
+    assert p_itm - delta > 0.005
+
+
+def test_the_delta_probability_gap_scales_with_sigma_root_t():
+    """N(d1) - N(d2) grows with sigma*sqrt(T), so it is worst at long DTE."""
+    gaps = []
+    for dte in (2, 7, 14, 30):
+        d, p = _bs_delta_and_itm(295.73, 300.0, 0.25, dte / 365, "call")
+        gaps.append(d - p)
+    assert gaps == sorted(gaps)
+
+
+def test_screener_probability_is_n_d2_not_delta():
+    """prob_below must be the N(d2)-shaped quantity, not the delta-shaped one."""
+    spot, strike, vol, years = 319.92, 310.0, 0.2383, 12 / 365
+    delta, p_itm = _bs_delta_and_itm(spot, strike, vol, years, "put")
+    assert prob_below(spot, strike, vol, years) == pytest.approx(p_itm, abs=1e-12)
+    assert prob_below(spot, strike, vol, years) != pytest.approx(delta, abs=1e-4)
+
+
+# --------------------------------------------------------------------------- #
+# the volatility-difference signal
+# --------------------------------------------------------------------------- #
+
+def _chain(iv):
     """A minimal IWM-shaped chain holding one valid 300/301 call spread."""
-    exp = date(2026, 9, 11)
-    common = dict(underlying="IWM", right="call", expiry=exp, dte=12,
-                  open_interest=4836, gamma=0.0, theta=0.0, vega=0.0, iv=iv)
+    common = dict(underlying="IWM", right="call", expiry=date(2026, 9, 11),
+                  dte=12, open_interest=4836, gamma=0.0, theta=0.0, vega=0.0,
+                  iv=iv)
     return [
         OptionRow(symbol="IWM260911C00300000", strike=300.0,
                   bid=0.49, ask=0.51, delta=0.3184, **common),
@@ -142,76 +322,57 @@ def _chain(iv: float):
     ]
 
 
-def _snapshot(iv: float, realised: float) -> MarketSnapshot:
+def _snapshot(iv, realised):
     return MarketSnapshot(symbol="IWM", spot=295.74, realized_vol=realised,
                           sma20=293.0, rows=_chain(iv), feed="indicative",
                           asof=datetime(2026, 8, 30, 6, 2, 43))
 
 
-def test_no_premium_is_reported_when_implied_equals_realised():
-    """The bug this rewrite exists to kill.
+def test_equal_implied_and_realised_gives_exactly_zero_signal():
+    """The invariant the whole design rests on.
 
-    Journal run 3 traded IWM with implied 14.84% against realised 14.58% - a
-    ratio of 1.018, meaning essentially NO volatility risk premium was on
-    offer. It still reported vrp_edge = 2.75, because ev_rn came from delta
-    (N(d1)) while ev_rw came from a lognormal (N(d2)-shaped). Those disagree
-    even at identical volatility, so the "premium" was 86% model mismatch.
-
-    Same vol on both sides must mean no edge. If this test ever fails, the two
-    measures have drifted onto different models again.
+    Both valuations run the same function on the same credit and differ only
+    in volatility, so equal volatilities must cancel to the last bit. An
+    earlier build priced one side off delta and reported a premium of $2.75 on
+    a trade where implied and realised agreed to within 2%.
     """
-    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call", min_vrp=-1e9)
-    assert c.vrp_edge == pytest.approx(0.0, abs=0.01)
-    assert c.ev == pytest.approx(c.ev_rn, abs=0.01)
+    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call",
+                         min_vrp=-1e9)
+    assert c.vrp_edge == pytest.approx(0.0, abs=1e-9)
+    assert c.ev == pytest.approx(c.ev_rn, abs=1e-9)
 
 
-def test_premium_appears_only_when_implied_exceeds_realised():
-    """Rich implied vol must produce a positive, monotonically larger edge."""
-    edges = [_build_spreads(_snapshot(iv=iv, realised=0.147), "call", min_vrp=-1e9)[0].vrp_edge
+def test_signal_is_positive_only_when_implied_exceeds_realised():
+    edges = [_build_spreads(_snapshot(iv=iv, realised=0.147), "call",
+                            min_vrp=-1e9)[0].vrp_edge
              for iv in (0.147, 0.18, 0.25)]
-    assert edges[0] == pytest.approx(0.0, abs=0.01)
+    assert edges[0] == pytest.approx(0.0, abs=1e-9)
     assert edges == sorted(edges)
     assert edges[-1] > 1.0
 
 
-def test_cheap_implied_vol_produces_a_negative_edge():
-    """Implied BELOW realised means we would be selling vol too cheap."""
-    [c] = _build_spreads(_snapshot(iv=0.10, realised=0.147), "call", min_vrp=-1e9)
+def test_cheap_implied_vol_produces_a_negative_signal():
+    [c] = _build_spreads(_snapshot(iv=0.10, realised=0.147), "call",
+                         min_vrp=-1e9)
     assert c.vrp_edge < 0
 
 
-def test_delta_is_not_the_itm_probability():
-    """Why ev_rn cannot be computed from delta.
-
-    Delta is N(d1); P(finishing ITM) is N(d2). The gap is ~sigma*sqrt(T) and at
-    12 DTE it is worth more EV than MIN_EV_RW, so it cannot be waved away.
-    """
-    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call", min_vrp=-1e9)
-    p_itm_model = 1.0 - c.pop_rn
-    assert abs(p_itm_model - abs(c.short_delta)) > 0.01
-
-
-def test_partial_region_averages_the_linear_payoff():
-    """Between the strikes the payoff runs +max_profit -> -max_loss.
-
-    The midpoint is (max_profit - max_loss)/2, NOT -max_loss/2: at the short
-    strike the spread still expires for the whole credit.
-    """
-    mp, ml = 120.0, 380.0
-    ev, _ = _three_point_ev(1.0, 0.0, mp, ml)   # all probability in the band
-    assert ev == pytest.approx((mp - ml) / 2)
+def test_both_valuations_use_the_identical_credit():
+    """Only volatility may differ between the two. If the credit differed, the
+    difference would mix a pricing change into a volatility signal."""
+    [c] = _build_spreads(_snapshot(iv=0.25, realised=0.147), "call",
+                         min_vrp=-1e9)
+    ev_rw, _ = spread_ev(295.74, 300.0, 301.0, c.credit, 0.147, 12 / 365, "call")
+    ev_rn, _ = spread_ev(295.74, 300.0, 301.0, c.credit, 0.25, 12 / 365, "call")
+    assert c.ev == pytest.approx(ev_rw, abs=0.01)
+    assert c.ev_rn == pytest.approx(ev_rn, abs=0.01)
 
 
 # --------------------------------------------------------------------------- #
-# vrp_edge is the gate and the ranking key, not a diagnostic
+# the gate and the ranking key
 # --------------------------------------------------------------------------- #
 
 def test_gate_rejects_a_spread_with_no_measurable_premium():
-    """Implied == realised means the market is not paying us. Skip it.
-
-    A high ev_rw on such a spread only says the 20-day realised-vol estimate
-    came in low - an estimation error, not an edge.
-    """
     assert _build_spreads(_snapshot(iv=0.147, realised=0.147), "call") == []
 
 
@@ -220,12 +381,7 @@ def test_gate_admits_a_spread_with_a_real_premium():
     assert c.vrp_edge >= MIN_VRP_EDGE
 
 
-def test_score_rises_with_the_premium_not_with_realised_ev():
-    """Ranking key check: richer implied vol must score higher.
-
-    Structure, width, spread and max_loss are identical across these two, so
-    the premium is the only thing that moves.
-    """
+def test_score_rises_with_the_premium_when_nothing_else_changes():
     lo = _build_spreads(_snapshot(iv=0.20, realised=0.147), "call")[0]
     hi = _build_spreads(_snapshot(iv=0.28, realised=0.147), "call")[0]
     assert hi.vrp_edge > lo.vrp_edge
@@ -233,5 +389,18 @@ def test_score_rises_with_the_premium_not_with_realised_ev():
 
 
 def test_missing_implied_vol_makes_the_spread_untradable():
-    """No IV means the edge cannot be measured, so there is nothing to rank."""
+    """No IV means the signal cannot be computed, so there is nothing to rank."""
     assert _build_spreads(_snapshot(iv=None, realised=0.147), "call") == []
+
+
+def test_candidate_max_loss_reconciles_with_width_and_credit():
+    [c] = _build_spreads(_snapshot(iv=0.25, realised=0.147), "call")
+    assert c.max_loss == pytest.approx(c.width * 100.0 - c.credit * 100.0, abs=0.01)
+    assert c.max_profit == pytest.approx(c.credit * 100.0, abs=0.01)
+
+
+def test_score_is_dimensionless_premium_per_dollar_risked():
+    [c] = _build_spreads(_snapshot(iv=0.25, realised=0.147), "call")
+    expected = ((c.vrp_edge / c.max_loss)
+                * (1.0 - min(c.worst_spread_pct, 0.9)) * 0.80)  # width 1.0
+    assert c.score == pytest.approx(expected, abs=1e-4)

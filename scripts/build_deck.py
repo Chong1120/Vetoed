@@ -242,34 +242,40 @@ def build() -> str:
          ("volatility risk premium", {"bold": True, "color": ACCENT}),
          (".", {})],
     ], size=17)
-    text(s, M, Inches(5.5), Inches(11.0), Inches(1.0),
-         "Bakshi & Kapadia (2003), RFS 16(2)  ·  Carr & Wu (2009), RFS 22(3)  ·  "
-         "CBOE PUT index, Jun 1986–Dec 2018: 9.95% vs 14.93% volatility at "
-         "near-identical return.", size=11.5, color=MUTED, spacing=1.35)
+    text(s, M, Inches(5.3), Inches(11.2), Inches(1.4),
+         [("Bakshi & Kapadia (2003), RFS 16(2)  ·  Carr & Wu (2009), RFS 22(3)  ·  "
+           "CBOE PUT index, Jun 1986–Dec 2018: 9.95% vs 14.93% volatility at "
+           "near-identical return.\n", {}),
+          ("These establish that the premium exists. They do not validate this "
+           "agent: the PUT index is monthly at-the-money cash-secured puts, not "
+           "2–14 DTE defined-risk spreads.", {"color": WARN})],
+         size=11.5, color=MUTED, spacing=1.35)
     chrome(s, n, N)
 
     # 4 - delta is empty --------------------------------------------------- #
     s = slide(prs); n += 1
-    eyebrow(s, "Why most tools measure nothing")
-    heading(s, "Ranking by delta-derived EV is\nmathematically empty.")
-    body(s, M, Inches(3.15), Inches(6.2), [
-        [("Delta is the ", {}), ("risk-neutral", {"bold": True, "color": TEXT}),
-         (" probability of finishing in the money. Under risk-neutral pricing, "
-          "every fairly-priced option trade has an expected value of exactly ",
-          {}), ("zero", {"bold": True, "color": TEXT}), (".", {})],
-        [("That is a no-arbitrage identity, not an opinion. So a screener "
-          "ranking on delta-derived EV is ranking ", {}),
-         ("quote noise", {"bold": True, "color": LOSS}), (".", {})],
+    eyebrow(s, "Why a risk-neutral EV measures nothing")
+    heading(s, "The signal has to be a difference,\nnot a level.")
+    body(s, M, Inches(3.1), Inches(6.2), [
+        [("Under the risk-neutral measure a fairly-priced trade has an "
+          "expected P&L of exactly ", {}),
+         ("zero", {"bold": True, "color": TEXT}),
+         (". A no-arbitrage identity, not an opinion.", {})],
+        [("So an EV built from risk-neutral inputs can only reflect ", {}),
+         ("quoting noise", {"bold": True, "color": LOSS}),
+         (". The edge has to come from comparing two volatilities.", {})],
     ])
     x = M + Inches(6.9)
-    rect(s, x, Inches(3.05), Inches(4.7), Inches(2.15))
-    text(s, x + Inches(0.35), Inches(3.4), Inches(4.0), Inches(0.5),
-         "Under Q:  E[payoff] = 0", size=17, font=MONO, color=ACCENT, bold=True)
-    text(s, x + Inches(0.35), Inches(3.95), Inches(4.0), Inches(0.6),
-         "for every fairly-priced\noption trade, always.",
-         size=13, font=MONO, color=MUTED, spacing=1.3)
-    text(s, x + Inches(0.35), Inches(4.6), Inches(4.0), Inches(0.4),
-         "No edge to find there.", size=14, font=MONO, color=LOSS, bold=True)
+    rect(s, x, Inches(3.0), Inches(4.7), Inches(2.3))
+    text(s, x + Inches(0.32), Inches(3.28), Inches(4.1), Inches(0.35),
+         "AND DELTA IS NOT A PROBABILITY", size=11, font=MONO, color=WARN,
+         bold=True, letter_space=1.3)
+    text(s, x + Inches(0.32), Inches(3.72), Inches(4.1), Inches(0.9),
+         "delta  = N(d1)\nP(ITM) = N(d2)",
+         size=16, font=MONO, color=ACCENT, bold=True, spacing=1.35)
+    text(s, x + Inches(0.32), Inches(4.68), Inches(4.1), Inches(0.6),
+         "The gap flips sign between calls and puts.",
+         size=12, color=MUTED, spacing=1.25)
     chrome(s, n, N)
 
     # 5 - the measurement -------------------------------------------------- #
@@ -303,25 +309,28 @@ def build() -> str:
     s = slide(prs); n += 1
     eyebrow(s, "Proof the measurement is honest")
     heading(s, "I caught my own agent lying.")
-    body(s, M, Inches(2.62), Inches(6.5), [
-        [("The first build computed ", {}),
-         ("ev_rn", {"font": MONO, "color": TEXT}), (" from ", {}),
-         ("delta", {"bold": True, "color": TEXT}), (" and ", {}),
-         ("ev_rw", {"font": MONO, "color": TEXT}),
-         (" from a lognormal. Those disagree even at identical volatility.", {})],
-        [("The journal proved it. IWM at implied 14.84% vs realised 14.58% — "
-          "a ratio of 1.018, so ", {}),
-         ("no premium existed", {"bold": True, "color": TEXT}),
-         (". It reported $2.75 anyway.", {})],
-        [("86% of that was model mismatch.", {"bold": True, "color": TEXT}),
-         (" Both sides now use one model, and nine tests pin the invariant.", {})],
-    ], size=15)
+    body(s, M, Inches(2.52), Inches(6.5), [
+        [("One. ", {"bold": True, "color": WARN}),
+         ("The first build priced one side off ", {}),
+         ("delta", {"bold": True, "color": TEXT}),
+         (" and the other off a lognormal. IWM at implied 14.84% against "
+          "realised 14.58% — no gap existed — and it reported $2.75 anyway.", {})],
+        [("Two. ", {"bold": True, "color": WARN}),
+         ("The payoff between the strikes was valued at its midpoint. Under a "
+          "lognormal that is wrong by up to ", {}),
+         ("$37", {"bold": True, "color": TEXT}),
+         (", and it exceeded the $2.00 gate in 17% of cases — enough to flip "
+          "a trade decision, not just a displayed number.", {})],
+        [("Both fixed, both pinned by tests.", {"bold": True, "color": TEXT}),
+         (" The expected value is now exact in closed form, checked against a "
+          "brute-force integral of the payoff.", {})],
+    ], size=13.5)
     x = M + Inches(7.1)
     card(s, x, Inches(2.55), Inches(4.5), Inches(1.55),
-         "Before — delta vs lognormal", "+$2.75",
-         "reported on a trade with no premium on offer", LOSS, 28)
+         "Reported on a no-gap trade", "+$2.75",
+         "delta priced one side, a lognormal the other", LOSS, 28)
     card(s, x, Inches(4.28), Inches(4.5), Inches(1.75),
-         "After — one model, vol only", "+$0.34",
+         "Same trade, one exact model", "+$0.34",
          "honest, and below the $2.00 gate — so it is not taken", PROFIT, 28)
     chrome(s, n, N)
 
@@ -348,7 +357,7 @@ def build() -> str:
                  font=MONO, color=MUTED, align=PP_ALIGN.CENTER)
     rows = [("Echoed legs are compared to the real candidate", "hallucination → no-trade", LOSS),
             ("The model returns contracts, and it is discarded", "cannot size", LOSS),
-            ("No tool output ever enters the prompt", "no injection surface", LOSS),
+            ("No tool output reaches it; the rest is whitelisted", "controlled vocabulary", LOSS),
             ("No API key? Deterministic selection runs instead", "still autonomous", PROFIT)]
     y = Inches(4.35)
     for label, tag, col in rows:
@@ -396,10 +405,11 @@ def build() -> str:
     # 9 - it refuses ------------------------------------------------------- #
     s = slide(prs); n += 1
     eyebrow(s, "It refuses to trade")
-    heading(s, "17 valid spreads. 6 survived.")
+    heading(s, "20 valid spreads. 7 survived.")
     text(s, M, Inches(2.42), Inches(11.0), Inches(0.4),
-         "One live screen of the universe. The edge tracks implied-vs-realised "
-         "exactly as the theory predicts.", size=15, color=DIM)
+         "One snapshot, counted at each gate. The signal tracks "
+         "implied-versus-realised, as the hypothesis predicts.",
+         size=15, color=DIM)
     hdr = ["Underlying", "Implied / realised", "Outcome"]
     cols = [Inches(2.2), Inches(3.0), Inches(6.4)]
     y = Inches(3.05)
@@ -409,10 +419,10 @@ def build() -> str:
              color=MUTED, bold=True, letter_space=1.3)
         x += cols[i]
     y += Inches(0.42)
-    data = [("AAPL", "1.26", PROFIT, "top two candidates — +$41.32, +$32.30"),
-            ("SPY", "1.069", WARN, "three candidates, +$4.28 to +$5.43"),
-            ("IWM", "1.067", WARN, "one at +$10.11; three cut at ~$0"),
-            ("QQQ", "0.894", LOSS, "ZERO CANDIDATES — implied below realised, it sits out")]
+    data = [("AAPL", "1.260", PROFIT, "2 of 2 survive — +$42.45 and +$33.42"),
+            ("SPY", "1.069", WARN, "3 of 3 survive, +$4.29 to +$5.44"),
+            ("IWM", "1.067", WARN, "2 of 13 survive, best +$11.67"),
+            ("QQQ", "0.894", LOSS, "0 of 2 — implied below realised, it sits out")]
     for sym, ratio, col, outcome in data:
         x = M
         text(s, x, y, cols[0], Inches(0.35), sym, size=15, font=MONO, color=TEXT,
@@ -449,7 +459,7 @@ def build() -> str:
          "chong1120.github.io/Vetoed", size=17, font=MONO, color=ACCENT,
          bold=True)
     x = M + Inches(7.1)
-    card(s, x, Inches(2.85), Inches(2.15), Inches(1.35), "Tests", "77",
+    card(s, x, Inches(2.85), Inches(2.15), Inches(1.35), "Tests", "144",
          "passing", PROFIT, 30)
     card(s, x + Inches(2.35), Inches(2.85), Inches(2.15), Inches(1.35),
          "LLM writes", "0", "to the broker", TEXT, 30)
@@ -468,8 +478,9 @@ def build() -> str:
          "— and every number downstream — comes from a derived quote."),
         ("Four correlated tickers is not diversification.", " It spreads across "
          "names, not risk factors."),
-        ("A 20-day vol estimate carries ~16% standard error.", " Gating on the "
-         "premium reduces the resulting selection bias. It does not remove it."),
+        ("The literature is the prior, not the proof.", " It shows a volatility "
+         "premium exists. It does not validate this horizon, these strikes, or "
+         "any threshold in this system."),
         ("A contest window is statistical noise.", " Ten to twenty trades cannot "
          "separate a 60% win rate from 70%. That is exactly why the circuit "
          "breaker refuses to react to fewer than five closed trades, and can "
@@ -494,7 +505,7 @@ def build() -> str:
     text(s, M, Inches(4.85), CONTENT_W, Inches(1.3),
          [("chong1120.github.io/Vetoed\n", {"color": ACCENT, "bold": True}),
           ("github.com/Chong1120/Vetoed\n", {"color": DIM}),
-          ("MIT  ·  Alpaca paper trading  ·  77 tests", {"color": MUTED})],
+          ("MIT  ·  Alpaca paper trading  ·  144 tests", {"color": MUTED})],
          size=14, font=MONO, spacing=1.75)
 
     prs.save(OUT)

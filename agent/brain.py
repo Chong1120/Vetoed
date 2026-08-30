@@ -14,9 +14,21 @@ The model also returns `contracts`, because the schema calls for it, but that
 number is ADVISORY ONLY and is discarded. risk.py sizes every position. When
 the two disagree we log both, which makes for an honest audit trail.
 
-Nothing from the MCP server or any other tool output is fed to the model. It
-sees only the screener's own numeric candidates plus account-level scalars.
-That keeps the prompt-injection surface at zero.
+THE PROMPT BOUNDARY, STATED PRECISELY. No MCP tool output reaches the model.
+What does reach it is the screener's own candidate numbers, account scalars
+that were passed through float(), and a whitelisted set of per-underlying
+figures this codebase computed itself.
+
+The whitelist in build_prompt() is the enforcement point, and it exists
+because of a real hole: screener.screen() records a failed underlying with the
+exception message, and an Alpaca error string is partly chosen by the server.
+Forwarding that dict wholesale would have put externally-influenced text in
+the prompt. Only the exception CLASS NAME crosses now.
+
+So the accurate claim is not "zero attack surface" - it is that every string
+reaching the model comes from a fixed vocabulary this repository controls, and
+tests/test_brain.py tries to smuggle an instruction through the error channel
+to prove it.
 """
 
 from __future__ import annotations
@@ -316,9 +328,34 @@ def build_prompt(shortlist: list[dict], context: dict,
             "open_interest": c["min_open_interest"],
         })
 
+    # WHITELIST, not passthrough. `context["underlyings"]` is assembled from
+    # Alpaca responses, and on a failure it carries an exception message whose
+    # text an external service partly controls. Forwarding the dict wholesale
+    # would put that string in the prompt. Only numbers this codebase computed
+    # itself are copied across, plus an exception class name, which comes from
+    # a fixed vocabulary. This is what lets the docs say no externally
+    # controlled free text reaches the model.
+    numeric = ("spot", "sma20", "atm_iv", "realized_vol_20d", "iv_vs_rv",
+               "contracts_examined")
+    market: dict = {}
+    for sym, d in (context.get("underlyings") or {}).items():
+        if not isinstance(d, dict):
+            continue
+        key = str(sym)[:12]
+        if "error" in d:
+            market[key] = {"error": str(d.get("error"))[:40]}
+            continue
+        clean = {k: d[k] for k in numeric if d.get(k) is not None}
+        clean["above_trend"] = bool(d.get("above_trend"))
+        market[key] = clean
+
+    feed = str(context.get("feed") or "unknown")
+    if feed not in ("opra", "indicative"):
+        feed = "unknown"
+
     payload = {
-        "market": context.get("underlyings", {}),
-        "quote_feed": context.get("feed"),
+        "market": market,
+        "quote_feed": feed,
         "account": {
             "equity": account.get("equity"),
             "day_pnl": account.get("day_pnl"),

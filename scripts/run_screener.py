@@ -66,10 +66,12 @@ def main() -> int:
     print("  max loss $%.0f per spread, hard-capped" % top.max_loss)
     print("  short strike is %.2f%% OTM, delta %.2f, OI >= %d" % (
         top.distance_pct * 100, top.short_delta, top.min_open_interest))
-    print("  real-world POP ~%.0f%% (from %.1f%% realised vol), EV $%.2f"
+    print("  model POP ~%.0f%% held to expiry, at %.1f%% realised vol; EV $%.2f"
           % (top.pop * 100, top.realized_vol * 100, top.ev))
-    print("  risk-neutral EV $%.2f -> volatility risk premium captured: $%.2f"
-          % (top.ev_rn, top.vrp_edge))
+    print("  same spread, same credit, at %.1f%% implied vol: EV $%.2f"
+          % ((top.short_iv or 0) * 100, top.ev_rn))
+    print("  volatility-gap signal (ev_rw - ev_rn): $%.2f per spread"
+          % top.vrp_edge)
     return 0
 
 

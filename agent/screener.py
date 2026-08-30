@@ -9,41 +9,58 @@ output, which makes it testable and the agent's behaviour auditable.
     brain.py     what is ATTRACTIVE right now             (judgement)
     risk.py      what we are ALLOWED to take, and how big (hard gates)
 
-WHY THE RANKING USES TWO PROBABILITY MEASURES
----------------------------------------------
-Delta is the RISK-NEUTRAL probability of finishing in the money. Under
-risk-neutral pricing every fairly-priced option trade has an expected value of
-exactly zero - that is a no-arbitrage identity, not an opinion. So ranking
-candidates by a delta-derived EV measures nothing except quote noise.
+WHAT THIS MODULE MEASURES, STATED CAREFULLY
+-------------------------------------------
+Everything below is computed under ONE model: a zero-drift lognormal for the
+terminal price, with E[S_T] = S_0. See `spread_ev` for the exact statement.
+Volatility is the only input that ever changes between the two valuations:
 
-Option selling is profitable because risk-neutral probabilities systematically
-OVERSTATE the real-world chance of large moves. That gap is the volatility
-risk premium:
+    ev_rn   the spread's expected payoff when the model is fed the SHORT LEG'S
+            IMPLIED volatility. An approximation to how the market itself
+            values this spread.
+    ev_rw   the same spread, same credit, fed 20-day REALISED volatility. A
+            counterfactual: what it would be worth if volatility to expiry
+            matched what the underlying has recently done.
 
-  - Bakshi & Kapadia (2003), Review of Financial Studies 16(2), 527-566:
-    delta-hedged S&P 500 option portfolios underperform zero, and the
-    underperformance is greater at higher volatility.
-  - Carr & Wu (2009), Review of Financial Studies 22(3), 1311-1341:
-    variance risk premiums quantified across 5 indices and 35 stocks.
-  - CBOE PUT index (data from June 1986): 9.9% annualised volatility vs
-    14.9% for the S&P 500, with a higher Sharpe ratio over 32.5 years.
+    vrp_edge = ev_rw - ev_rn
 
-So this module uses BOTH measures deliberately:
+`vrp_edge` is this project's OPERATIONAL SIGNAL, in dollars per spread. It is
+the P&L attributable purely to the implied-minus-realised volatility gap under
+this model. Because both sides share a model, a credit, and a drift, the
+difference isolates the volatility gap and is exactly zero when the two
+volatilities agree - which is pinned by a test.
 
-    credit received  <- the market quote  (risk-neutral, carries the premium)
-    ev_rn            <- that credit priced at the market's IMPLIED volatility
-    ev_rw            <- that credit priced at 20-day REALISED volatility
+WHAT IT IS NOT. It is not the variance risk premium of Carr & Wu (2009), which
+is defined on variance swap rates over a matched horizon. Ours is a
+spread-level dollar figure from a single quote snapshot under a simplified
+model. The academic literature motivates WHY such a gap should persist; it
+does not certify this particular estimator. Treat `vrp_edge` as a screening
+signal with an economic rationale, not as a measured risk premium.
 
-Both EVs run through ONE probability model and differ only in the volatility
-fed into it. That is the whole point: `vrp_edge = ev_rw - ev_rn` then isolates
-exactly the implied-minus-realised gap - the premium being harvested - and
-correctly reads ~0 when implied and realised agree, i.e. when there is no
-premium to harvest.
+WHY NOT RANK ON DELTA
+---------------------
+Delta is a risk-neutral sensitivity, N(d1) for a call. The risk-neutral
+probability of finishing in the money is N(d2) = N(d1 - sigma.sqrt(T)). They
+are close but not equal, and the gap has OPPOSITE SIGN for calls and puts, so
+substituting one for the other biases the two sides of the book in opposite
+directions.
 
-`vrp_edge` is therefore both the GATE and the RANKING KEY. Ranking on `ev_rw`
-alone would rank on how low the 20-day realised-vol estimate happened to come
-in - an estimation error - instead of on what the market is actually paying
-us to carry the risk.
+Separately, and more fundamentally: under the risk-neutral measure a
+fairly-priced trade has zero expected P&L by construction. So any EV computed
+purely from risk-neutral inputs carries no edge information - it can only
+reflect quoting noise and model error. That is why the signal is a DIFFERENCE
+between two volatility parameterisations rather than a level.
+
+Why a gap should exist at all - the economic prior, not proof of this system:
+  - Bakshi & Kapadia (2003), RFS 16(2), 527-566: delta-hedged S&P 500 option
+    portfolios earn less than zero on average, consistent with a negative
+    market volatility risk premium.
+  - Carr & Wu (2009), RFS 22(3), 1311-1341: variance risk premiums measured
+    across 5 indices and 35 stocks.
+  - CBOE PUT index (Jun 1986-Dec 2018): systematic ONE-MONTH AT-THE-MONEY
+    CASH-SECURED put writing returned 9.54% at 9.95% volatility versus 9.80%
+    at 14.93% for the S&P 500. Different instrument and horizon from what this
+    module trades, so it is supporting context, not validation.
 """
 
 from __future__ import annotations
@@ -91,7 +108,7 @@ WIDTH_PREFERENCE = {1.0: 0.80, 2.0: 1.00, 5.0: 1.00}  # $1 wide pays too little
 MIN_CREDIT_RATIO = 0.12
 MAX_CREDIT_RATIO = 0.60
 
-MIN_EV_RW = 1.00        # dollars per spread, real-world measure
+MIN_EV_RW = 1.00        # dollars per spread, priced at realised vol
 
 # The premium is the entire thesis, so it is a GATE and the ranking key - not
 # a diagnostic printed beside a ranking that ignores it. Below ~$2 the measured
@@ -123,11 +140,11 @@ class SpreadCandidate:
     credit_ratio: float
     short_delta: float
     long_delta: float
-    pop: float                # real-world probability of profit
-    pop_rn: float             # risk-neutral (implied-vol), for comparison
-    ev: float                 # real-world EV - what we rank on
-    ev_rn: float              # same spread priced at implied vol
-    vrp_edge: float           # ev - ev_rn: the premium being harvested
+    pop: float                # model P(short strike survives) at realised vol
+    pop_rn: float             # same, at implied vol - for comparison only
+    ev: float                 # ev_rw: expected payoff priced at realised vol
+    ev_rn: float              # expected payoff priced at implied vol
+    vrp_edge: float           # ev_rw - ev_rn: the volatility-gap signal, $
     short_iv: float | None
     realized_vol: float
     min_open_interest: int
@@ -148,40 +165,93 @@ def norm_cdf(x: float) -> float:
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def _d(spot: float, strike: float, vol: float, years: float) -> float:
+    """The exponent argument shared by every formula below."""
+    return ((math.log(strike / spot) + 0.5 * vol * vol * years)
+            / (vol * math.sqrt(years)))
+
+
+def _inputs_ok(spot: float, strike: float, vol: float, years: float) -> bool:
+    return spot > 0 and strike > 0 and vol > 0 and years > 0
+
+
 def prob_below(spot: float, strike: float, vol: float, years: float) -> float:
-    """Real-world P(S_T < K) under driftless lognormal returns.
+    """P(S_T < K) under the model described in `spread_ev`.
 
-    The CALLER chooses the volatility. Pass realised vol for the real-world
-    measure, implied vol for the risk-neutral one. Running both through this
-    same function is what makes their difference mean something.
+    NOT a real-world probability. It is the probability under a zero-drift
+    lognormal whose volatility the caller supplies, which is a modelling
+    choice, not an observation. See `spread_ev` for what that does and does
+    not entitle us to claim.
     """
-    if spot <= 0 or strike <= 0 or vol <= 0 or years <= 0:
+    if not _inputs_ok(spot, strike, vol, years):
         return float("nan")
-    d = (math.log(strike / spot) + 0.5 * vol * vol * years) / (vol * math.sqrt(years))
-    return norm_cdf(d)
+    return norm_cdf(_d(spot, strike, vol, years))
 
 
-def _three_point_ev(p_short_itm: float, p_long_itm: float,
-                    max_profit: float, max_loss: float) -> tuple[float, float]:
-    """(EV, probability of profit) for a vertical credit spread.
+def spread_ev(spot: float, k_short: float, k_long: float, credit: float,
+              vol: float, years: float, right: str) -> tuple[float, float]:
+    """EXACT expected payoff and probability of profit for a vertical credit
+    spread, in dollars per spread.
 
-        beyond neither strike -> keep the full credit   (+max_profit)
-        between the strikes   -> payoff runs LINEARLY from +max_profit at the
-                                 short strike to -max_loss at the long strike
-        beyond both strikes   -> full max loss          (-max_loss)
+    THE MODEL, STATED PRECISELY. Terminal price is lognormal with zero drift:
 
-    The middle band is the easy one to get wrong. The payoff there is NOT
-    "about half the max loss" - at the short strike the spread still expires
-    for the entire credit. Averaging the linear payoff across the band gives
-    (max_profit - max_loss) / 2, which is what is used below.
+        ln S_T ~ Normal( ln S_0 - sigma^2 T / 2 ,  sigma^2 T )   =>  E[S_T] = S_0
+
+    Zero drift means the forward equals spot: no interest, no dividends, and
+    crucially NO equity risk premium. We are not claiming the stock has zero
+    expected return - we are declining to take a directional view, which for a
+    premium seller is the conservative choice on the put side.
+
+    Because the drift is fixed, the ONLY thing that changes between the two
+    valuations this module computes is `vol`. That is what makes their
+    difference interpretable (see `vrp_edge` in the module docstring).
+
+    EXACT, NOT APPROXIMATE. The payoff has three regions - full credit beyond
+    the short strike, a linear ramp between the strikes, and full max loss
+    beyond the long strike. The ramp is integrated in closed form using
+
+        E[S_T . 1{S_T < K}] = S_0 . N(d(K) - sigma.sqrt(T))
+
+    so no quadrature and no midpoint rule is involved. An earlier version
+    evaluated the ramp at the midpoint of the strike band, which is only right
+    when E[S_T | in the band] lands exactly on that midpoint. Under a lognormal
+    it does not, and the resulting error reached tens of dollars on wide
+    spreads - larger than MIN_VRP_EDGE, so it could flip the trade/no-trade
+    decision. `tests/test_screener_math.py` pins this against a numerically
+    integrated reference.
+
+    Returns (ev, probability of profit). `pop` is P(short strike not breached
+    at expiry) - a hold-to-expiry number, unrelated to the probability of the
+    take-profit exit firing first.
     """
-    p_win = 1.0 - p_short_itm
-    p_partial = max(p_short_itm - p_long_itm, 0.0)
-    p_maxloss = p_long_itm
-    ev = (p_win * max_profit
-          + p_partial * (max_profit - max_loss) * 0.5
-          - p_maxloss * max_loss)
-    return ev, p_win
+    if not _inputs_ok(spot, k_short, vol, years) or k_long <= 0:
+        return float("nan"), float("nan")
+
+    width = abs(k_short - k_long)
+    max_profit = credit * 100.0
+    max_loss = width * 100.0 - max_profit
+
+    sd = vol * math.sqrt(years)
+    d_s, d_l = _d(spot, k_short, vol, years), _d(spot, k_long, vol, years)
+
+    if right == "put":
+        # Band is k_long < S < k_short; payoff there is 100*(credit-(k_short-S))
+        lo_d, hi_d = d_l, d_s
+        p_band = norm_cdf(hi_d) - norm_cdf(lo_d)
+        e_s_band = spot * (norm_cdf(hi_d - sd) - norm_cdf(lo_d - sd))
+        ramp = 100.0 * ((credit - k_short) * p_band + e_s_band)
+        ev = max_profit * (1.0 - norm_cdf(d_s)) + ramp - max_loss * norm_cdf(d_l)
+        pop = 1.0 - norm_cdf(d_s)
+    else:
+        # Band is k_short < S < k_long; payoff there is 100*(credit-(S-k_short))
+        lo_d, hi_d = d_s, d_l
+        p_band = norm_cdf(hi_d) - norm_cdf(lo_d)
+        e_s_band = spot * (norm_cdf(hi_d - sd) - norm_cdf(lo_d - sd))
+        ramp = 100.0 * ((credit + k_short) * p_band - e_s_band)
+        ev = max_profit * norm_cdf(d_s) + ramp - max_loss * (1.0 - norm_cdf(d_l))
+        pop = norm_cdf(d_s)
+
+    return ev, pop
 
 
 # --------------------------------------------------------------------------- #
@@ -254,44 +324,45 @@ def _build_spreads(snap: MarketSnapshot, right: str,
             if max_loss <= 0:
                 continue
 
+            # Calendar-day year fraction. Implied vol is quoted on this
+            # convention, so using it keeps the two valuations below on the
+            # same clock. It is not a trading-day count and is not claimed to
+            # be one.
             years = max(short.dte, 1) / 365.0
 
-            def _probs(v: float) -> tuple[float, float]:
-                """(P short breached, P long breached) at volatility `v`."""
-                ps = prob_below(spot, short.strike, v, years)
-                pl = prob_below(spot, long_strike, v, years)
-                return (ps, pl) if right == "put" else (1.0 - ps, 1.0 - pl)
-
-            # --- real-world view: 20-day realised volatility -------------- #
-            p_short, p_long = _probs(vol)
-            if math.isnan(p_short) or math.isnan(p_long):
-                continue
-            ev_rw, pop_rw = _three_point_ev(p_short, p_long,
-                                            max_profit, max_loss)
-            if ev_rw < MIN_EV_RW:
+            # --- valuation A: priced at 20-day REALISED volatility -------- #
+            # A counterfactual: what this spread would be worth if volatility
+            # to expiry matched what the underlying has recently done. `vol`
+            # is an estimator from 20 daily returns, not a forecast.
+            ev_rw, pop_rw = spread_ev(spot, short.strike, long_strike,
+                                      credit, vol, years, right)
+            if math.isnan(ev_rw) or ev_rw < MIN_EV_RW:
                 continue
 
-            # --- risk-neutral view: the market's own implied volatility --- #
-            # NOT delta. Delta is N(d1); the probability of finishing in the
-            # money is N(d2). They differ by ~sigma*sqrt(T), which at 14 DTE is
-            # worth several dollars of EV - more than MIN_EV_RW itself. Pricing
-            # ev_rn off delta while ev_rw came from a lognormal made vrp_edge
-            # report a premium even when implied == realised, i.e. when there
-            # was demonstrably no premium. Same model both sides, vol is the
-            # only thing that changes.
+            # --- valuation B: priced at the market's IMPLIED volatility --- #
+            # Deliberately NOT delta. Delta is N(d1); the probability of
+            # finishing in the money is N(d2), and the two differ by roughly
+            # sigma*sqrt(T). Pricing this side off delta while the other side
+            # came from a lognormal made the difference report a premium even
+            # when implied and realised vol were equal - a premium that could
+            # not exist. Same model both sides; volatility is the only input
+            # that changes.
+            #
+            # Uses the SHORT leg's implied vol for both legs, so vertical skew
+            # between the strikes is not modelled. That is a stated
+            # simplification, and it is why ev_rn does not sit at zero.
             iv = short.iv if (short.iv is not None and short.iv > 0) else None
             if iv is None:
-                continue     # no IV -> the edge is unmeasurable -> not tradable
-            p_short_rn, p_long_rn = _probs(iv)
-            if math.isnan(p_short_rn) or math.isnan(p_long_rn):
+                continue     # edge is unmeasurable, so the spread is not taken
+            ev_rn, pop_rn = spread_ev(spot, short.strike, long_strike,
+                                      credit, iv, years, right)
+            if math.isnan(ev_rn):
                 continue
-            ev_rn, pop_rn = _three_point_ev(p_short_rn, p_long_rn,
-                                            max_profit, max_loss)
 
-            # The gate. We are here to harvest a premium; if the market is not
-            # paying one, a high real-world EV only means the realised-vol
-            # estimate came in low - an estimation error we would be ranking
-            # on, rather than an edge we are being paid for.
+            # The gate. We are here to be paid for carrying volatility risk.
+            # If the market is not paying, a high ev_rw only means the realised
+            # -vol estimate happened to come in low, which is estimation error
+            # rather than compensation.
             vrp_edge = ev_rw - ev_rn
             if vrp_edge < min_vrp:
                 continue
@@ -409,8 +480,13 @@ def screen(market, universe: list[str] | None = None,
         try:
             snap = market.snapshot(symbol, dte_min, dte_max)
         except Exception as exc:
-            context["underlyings"][symbol] = {"error": "%s: %s"
-                                              % (type(exc).__name__, exc)}
+            # Type name and message are kept apart on purpose. brain.py
+            # forwards only the type to the model, because the message can
+            # carry text an external service chose.
+            context["underlyings"][symbol] = {
+                "error": type(exc).__name__,
+                "error_detail": str(exc)[:300],
+            }
             continue
         context["feed"] = snap.feed
         iv = atm_iv(snap.rows, snap.spot)

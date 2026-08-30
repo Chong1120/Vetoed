@@ -41,3 +41,6 @@ claude_desktop_config.json
 
 # Built by scripts/export_static.py; published by CI, not committed
 site/
+
+# Stale the moment the deck is rebuilt; re-export from Vetoed-deck.pptx
+Vetoed-deck.pdf

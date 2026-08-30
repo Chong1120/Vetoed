@@ -30,40 +30,51 @@ exceeds subsequently realised volatility, so option sellers are compensated:
   delta-hedged S&P 500 option portfolios underperform zero
 - **Carr & Wu (2009)**, *RFS* 22(3), 1311–1341 — variance risk premiums across
   5 indices and 35 stocks
-- **CBOE PUT Index** (since 1986) — 9.9% annualised volatility vs 14.9% for the
-  S&P 500, higher Sharpe over 32.5 years
+- **CBOE PUT Index** (Jun 1986–Dec 2018) — one-month **at-the-money
+  cash-secured** put writing returned 9.54% at 9.95% volatility, against 9.80%
+  at 14.93% for the S&P 500
 
-**We harvest a risk premium; we do not make a prediction.**
+These motivate *why* a volatility premium should exist. None of them validate
+this agent: the PUT index in particular is a different instrument (ATM
+cash-secured puts, monthly) from the short-dated OTM defined-risk spreads
+traded here. Supporting context, not proof.
+
+**We aim to be paid for carrying volatility risk; we do not predict direction.**
 
 ## The measurement that makes the edge explicit
 
-Delta is the *risk-neutral* probability of finishing in-the-money — and under
-risk-neutral pricing, every fairly-priced option trade has expected value of
-exactly **zero**. Ranking candidates by delta-derived EV therefore measures
-nothing.
+Under the risk-neutral measure a fairly-priced trade has **zero** expected
+P&L by construction. So an EV built only from risk-neutral inputs carries no
+edge information. The signal has to be a *difference*, not a level.
 
-So the screener computes EV under **two measures**:
+Everything runs through **one model** — a zero-drift lognormal, `E[S_T] = S₀`
+— and **volatility is the only input that changes**:
 
-| Quantity | Measure | Source |
+| | Volatility fed in | What it estimates |
 |---|---|---|
-| Credit received | risk-neutral | market quote (contains the premium) |
-| Probability of loss | **real-world** | 20-day realised volatility |
+| `ev_rn` | short leg's **implied** vol | roughly how the market values this spread |
+| `ev_rw` | 20-day **realised** vol | what it would be worth if vol matched recent history |
+| **`vrp_edge`** | — | **`ev_rw − ev_rn`**: the volatility gap, in dollars |
 
-`vrp_edge = ev_rw − ev_rn` is the premium being harvested, as an inspectable
-number. Crucially **both EVs go through one model and differ only in the
-volatility fed to it** — `ev_rn` uses the market's implied vol, `ev_rw` uses
-20-day realised. Anything else measures the gap between two formulas rather
-than the premium: delta is N(d₁), not the N(d₂) probability of finishing ITM,
-and pricing one side off delta reported an edge on trades that had none (see
-`docs/writeup.md` §2). Underlyings whose implied vol sits *below* realised
-produce **no candidates at all**.
+Same credit, same drift, same closed form on both sides — so the difference
+isolates the volatility gap and is **exactly zero** when the two vols agree
+(pinned by a test). It is our operational signal, not the academic variance
+risk premium of Carr & Wu, which is defined on variance swap rates over a
+matched horizon.
+
+**Not delta.** Delta is N(d₁); the risk-neutral probability of finishing ITM is
+N(d₂). The gap between them has *opposite sign for calls and puts*, so
+substituting one for the other biases the two sides of the book in opposite
+directions. An earlier build did exactly that and reported an edge on trades
+that had none — see [`docs/how-it-works.md`](docs/how-it-works.md) §6.
 
 `vrp_edge` is the **gate and the ranking key**: it must clear $2.00, and the
-shortlist sorts on `vrp_edge / max_loss`. Ranking on real-world EV instead
-would rank on how low the realised-vol estimate happened to land — estimation
-error, not edge. On the last live screen this cut 17 valid spreads to 6, put
-AAPL (implied/realised **1.26**) on top, and had QQQ (**0.894**) sit out
-entirely.
+shortlist sorts on `vrp_edge / max_loss`. Ranking on `ev_rw` alone would rank
+on how low the realised-vol estimate happened to land — estimation error, not
+compensation. On the live screen recorded in §5.9 of the technical doc this
+cut **20 structurally valid spreads to 7** on a single snapshot, put AAPL
+(implied/realised **1.260**) on top, and had QQQ (**0.894**, implied below
+realised) produce **zero** candidates.
 
 ## Architecture
 
@@ -163,7 +174,7 @@ difference is judgement, not protection.
 .venv\Scripts\python.exe -m pytest tests\ -q
 ```
 
-**68 tests** covering the risk gates (naked-short rejection, loss-cap
+**144 tests** covering the risk gates (naked-short rejection, loss-cap
 verification, daily loss stop, concentration, sizing), the brain's defensive
 JSON parsing (hallucinated legs, flipped sides, garbage types), the probability
 maths, and the guardrail restrict-only invariant.
@@ -177,7 +188,7 @@ maths, and the guardrail restrict-only invariant.
 | LLM cannot size | `risk.size_position()` is a pure function; the model's `contracts` field is discarded |
 | LLM cannot invent a trade | Echoed legs verified against the shortlist; mismatch → no-trade |
 | Guardrails cannot loosen | `adapt.build()` clamps every override back to the defaults |
-| No prompt injection | MCP output marked `untrusted_tool_output` never enters the model's context |
+| Prompt boundary | No MCP output reaches the model. Everything in the prompt is numeric or from a vocabulary this repo controls — enforced by a whitelist in `build_prompt()`, tested by trying to smuggle an instruction through the error channel |
 | Paper only | `ALPACA_PAPER_TRADE=true` asserted at every entry point |
 | Bounded bad day | Daily loss stop halts the session at −3% |
 
