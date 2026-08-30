@@ -95,8 +95,10 @@ jobs:
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           ALPACA_PAPER_TRADE: ${{ secrets.ALPACA_PAPER_TRADE }}
-          # Optional. Absent, brain.py falls back to deterministic selection
-          # and the agent keeps trading.
+          # Judgement layer. Both optional: with neither, brain.py uses
+          # deterministic selection and the agent keeps trading.
+          FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
+          FEATHERLESS_MODEL: ${{ vars.FEATHERLESS_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           # Scheduled ticks trade. Manual runs are dry unless explicitly asked.

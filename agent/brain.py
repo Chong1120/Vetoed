@@ -36,13 +36,59 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, asdict
 
-import anthropic
 from dotenv import load_dotenv
 
-MODEL = os.getenv("BRAIN_MODEL", "claude-sonnet-4-6")
+# --------------------------------------------------------------------------- #
+# providers
+# --------------------------------------------------------------------------- #
+# Two are supported, and neither is required. The judgement layer is optional
+# by design: `deterministic_decide` below runs the same shortlist through fixed
+# arithmetic, and every risk gate downstream is identical either way. That is
+# what makes an API outage a degradation rather than an outage.
+#
+#   featherless   OpenAI-compatible, open-weight models. The hackathon's
+#                 partner, so this is the default when its key is present.
+#   anthropic     Claude, via the official SDK. Imported lazily so the package
+#                 is not a hard dependency of the agent.
+#
+# Selection is automatic unless BRAIN_PROVIDER forces one.
+
+FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
+
+# Overridable because model availability depends on the plan. If this one is
+# not on yours, set FEATHERLESS_MODEL - scripts/check_llm.py will tell you.
+FEATHERLESS_MODEL = os.getenv("FEATHERLESS_MODEL",
+                              "Qwen/Qwen2.5-72B-Instruct")
+ANTHROPIC_MODEL = os.getenv("BRAIN_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = 16000
+LLM_TIMEOUT_SECONDS = 90
+
+
+def _placeholder(value: str) -> bool:
+    """.env.example ships placeholders; treat them as absent, not as keys."""
+    v = (value or "").strip().lower()
+    return (not v) or ("your" in v) or ("here" in v)
+
+
+def resolve_provider() -> str:
+    """Which judgement layer to use this cycle: featherless, anthropic, none.
+
+    Explicit beats implicit: BRAIN_PROVIDER wins if set. Otherwise whichever
+    key is actually present, preferring Featherless.
+    """
+    forced = os.getenv("BRAIN_PROVIDER", "").strip().lower()
+    if forced in ("featherless", "anthropic", "none"):
+        return forced
+    if not _placeholder(os.getenv("FEATHERLESS_API_KEY", "")):
+        return "featherless"
+    if not _placeholder(os.getenv("ANTHROPIC_API_KEY", "")) or \
+            os.getenv("ANTHROPIC_AUTH_TOKEN"):
+        return "anthropic"
+    return "none"
 
 SYSTEM_PROMPT = """\
 You are the decision layer of an autonomous options-trading agent running on \
@@ -375,13 +421,111 @@ def build_prompt(shortlist: list[dict], context: dict,
     )
 
 
+def call_featherless(prompt: str, api_key: str, model: str | None = None,
+                     timeout: int = LLM_TIMEOUT_SECONDS) -> str:
+    """One chat completion against Featherless. Returns the raw text.
+
+    Deliberately stdlib urllib rather than the `openai` package: this is a
+    single JSON POST, and an extra SDK would be a dependency, a version
+    constraint and another supply-chain edge for no benefit.
+
+    No `response_format` is sent. Support for it varies across
+    OpenAI-compatible servers, and a rejected parameter would fail the whole
+    call - whereas `extract_json` already tolerates fenced and prose-wrapped
+    output, which is the failure mode we would be guarding against anyway.
+    """
+    body = json.dumps({
+        "model": model or FEATHERLESS_MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        # Low but not zero: this is a selection task, not a creative one.
+        "temperature": 0.2,
+        "max_tokens": 1500,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        FEATHERLESS_URL, data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer %s" % api_key})
+
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+
+    choices = payload.get("choices") or []
+    if not choices:
+        raise ValueError("no choices in response: %s" % str(payload)[:300])
+    return (choices[0].get("message") or {}).get("content") or ""
+
+
+def _decide_featherless(shortlist, prompt, api_key):
+    try:
+        text = call_featherless(prompt, api_key)
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            pass
+        d = deterministic_decide(shortlist, "Featherless HTTP %s" % exc.code)
+        d.error = "HTTPError %s: %s" % (exc.code, detail or exc.reason)
+        return d
+    except Exception as exc:
+        d = deterministic_decide(shortlist, "Featherless call failed")
+        d.error = "%s: %s" % (type(exc).__name__, exc)
+        return d
+    return _parse_and_validate(text, shortlist)
+
+
+def _decide_anthropic(shortlist, prompt, api_key):
+    # Imported here so `anthropic` is only needed when it is actually used.
+    import anthropic
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key) if api_key \
+            else anthropic.Anthropic()
+        response = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=MAX_TOKENS,
+            system=SYSTEM_PROMPT,
+            thinking={"type": "adaptive"},
+            output_config={"format": {"type": "json_schema",
+                                      "schema": RESPONSE_SCHEMA}},
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as exc:
+        # An outage, an expired balance, or a bad key must not stop the agent.
+        d = deterministic_decide(shortlist, "Claude call failed")
+        d.error = "%s: %s" % (type(exc).__name__, exc)
+        return d
+
+    text = "".join(b.text for b in response.content if b.type == "text")
+    return _parse_and_validate(text, shortlist)
+
+
+def _parse_and_validate(text: str, shortlist: list[dict]) -> BrainDecision:
+    """Shared tail: parse whatever the model said, then verify it."""
+    try:
+        payload = extract_json(text)
+    except Exception as exc:
+        return no_trade("could not parse model output", raw=text[:4000],
+                        error="%s: %s" % (type(exc).__name__, exc))
+    decision = validate(payload, shortlist)
+    decision.raw = text[:4000]
+    return decision
+
+
 def decide(shortlist: list[dict], context: dict, account: dict,
            open_positions: list[dict] | None = None,
            use_llm: bool = True) -> BrainDecision:
     """Pick one candidate. Never raises - always returns a decision.
 
-    Falls back to deterministic selection when the LLM is unavailable or
-    disabled, so the agent is never blocked on an Anthropic key.
+    Falls back to deterministic selection whenever the judgement layer is
+    unavailable or disabled, so the agent is never blocked on any vendor.
+    Whichever path runs, `validate()` verifies the answer against the
+    shortlist and `risk.py` sizes it, so a provider swap cannot widen what the
+    model is allowed to do.
     """
     load_dotenv()
     if not shortlist:
@@ -390,50 +534,17 @@ def decide(shortlist: list[dict], context: dict, account: dict,
     if not use_llm:
         return deterministic_decide(shortlist, "--no-llm")
 
-    # An unset ANTHROPIC_API_KEY does not necessarily mean no credentials -
-    # the SDK also resolves ANTHROPIC_AUTH_TOKEN and `ant auth login` profiles.
-    # Only the .env placeholder is treated as definitely-absent.
-    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if api_key.startswith("sk-ant-your"):
-        api_key = ""
-    if not api_key and not os.getenv("ANTHROPIC_AUTH_TOKEN"):
-        return deterministic_decide(shortlist, "no ANTHROPIC_API_KEY")
+    provider = resolve_provider()
+    if provider == "none":
+        return deterministic_decide(shortlist, "no LLM provider configured")
 
     prompt = build_prompt(shortlist, context, account, open_positions or [])
 
-    try:
-        client = anthropic.Anthropic(api_key=api_key) if api_key \
-            else anthropic.Anthropic()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            thinking={"type": "adaptive"},
-            output_config={"format": {"type": "json_schema",
-                                      "schema": RESPONSE_SCHEMA}},
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except anthropic.APIStatusError as exc:
-        # An outage, an expired balance, or a bad key must not stop the agent.
-        d = deterministic_decide(shortlist, "Claude API error %s" % exc.status_code)
-        d.error = "%s: %s" % (type(exc).__name__, exc)
-        return d
-    except Exception as exc:
-        d = deterministic_decide(shortlist, "Claude call failed")
-        d.error = "%s: %s" % (type(exc).__name__, exc)
-        return d
+    if provider == "featherless":
+        return _decide_featherless(
+            shortlist, prompt, os.getenv("FEATHERLESS_API_KEY", "").strip())
 
-    text = ""
-    for block in response.content:
-        if block.type == "text":
-            text += block.text
-
-    try:
-        payload = extract_json(text)
-    except Exception as exc:
-        return no_trade("could not parse model output", raw=text[:4000],
-                        error="%s: %s" % (type(exc).__name__, exc))
-
-    decision = validate(payload, shortlist)
-    decision.raw = text[:4000]
-    return decision
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if _placeholder(api_key):
+        api_key = ""
+    return _decide_anthropic(shortlist, prompt, api_key)
