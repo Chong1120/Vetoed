@@ -57,6 +57,14 @@ def runs(limit: int = 50) -> JSONResponse:
     return JSONResponse(payload.runs(limit))
 
 
+@app.get("/api/health")
+def health() -> JSONResponse:
+    """Liveness for unattended operation. Returns 503 when the agent is stale,
+    so a plain uptime monitor can watch this URL without parsing the body."""
+    data = payload.health()
+    return JSONResponse(data, status_code=503 if data.get("stale") else 200)
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(os.path.join(STATIC, "index.html"))

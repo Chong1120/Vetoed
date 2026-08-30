@@ -459,7 +459,7 @@ def build() -> str:
          "chong1120.github.io/Vetoed", size=17, font=MONO, color=ACCENT,
          bold=True)
     x = M + Inches(7.1)
-    card(s, x, Inches(2.85), Inches(2.15), Inches(1.35), "Tests", "144",
+    card(s, x, Inches(2.85), Inches(2.15), Inches(1.35), "Tests", "184",
          "passing", PROFIT, 30)
     card(s, x + Inches(2.35), Inches(2.85), Inches(2.15), Inches(1.35),
          "LLM writes", "0", "to the broker", TEXT, 30)
@@ -505,7 +505,7 @@ def build() -> str:
     text(s, M, Inches(4.85), CONTENT_W, Inches(1.3),
          [("chong1120.github.io/Vetoed\n", {"color": ACCENT, "bold": True}),
           ("github.com/Chong1120/Vetoed\n", {"color": DIM}),
-          ("MIT  ·  Alpaca paper trading  ·  144 tests", {"color": MUTED})],
+          ("MIT  ·  Alpaca paper trading  ·  184 tests", {"color": MUTED})],
          size=14, font=MONO, spacing=1.75)
 
     prs.save(OUT)

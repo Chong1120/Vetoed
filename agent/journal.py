@@ -248,20 +248,35 @@ def all_orders(limit: int = 200, path: str = DB_PATH) -> list[dict]:
     return _rows("SELECT * FROM orders ORDER BY id DESC LIMIT ?", (limit,), path)
 
 
+# Statuses that mean the order is not, and never will be, live risk.
+#
+#   dry_run    simulated; never left this machine
+#   failed     the broker saw it and rejected it
+#   not_filled reconcile.py checked with the broker and found nothing
+#
+# NOTE what is deliberately ABSENT: 'uncertain'. When a submission times out
+# we do not know whether Alpaca received it, and the asymmetry is not close -
+# counting a position that does not exist costs one skipped trade, while
+# missing one that does exist can double a position. Uncertain orders are
+# therefore treated as live risk until reconcile.py resolves them against the
+# broker, at which point they become 'not_filled' or a confirmed position.
+DEAD_STATUSES = ("canceled", "cancelled", "rejected", "expired",
+                 "dry_run", "failed", "not_filled")
+
+
 def open_spreads(path: str = DB_PATH) -> list[dict]:
     """Live orders that have not been closed - our real open risk.
 
-    'dry_run' MUST be excluded. risk.py reads this to enforce the
-    concentration limit and the portfolio risk cap, so counting simulated
-    orders here would invent risk that does not exist and could veto real
-    trades. 'failed' is excluded for the same reason - it never reached
-    the broker.
+    risk.py reads this to enforce the concentration limit and the portfolio
+    risk cap, so a simulated or rejected order counted here would invent risk
+    that does not exist and veto real trades. See DEAD_STATUSES above for what
+    is excluded, and why 'uncertain' is not.
     """
+    placeholders = ",".join("?" for _ in DEAD_STATUSES)
     return _rows(
         "SELECT * FROM orders WHERE closed_ts IS NULL"
-        " AND status NOT IN ('canceled','cancelled','rejected','expired',"
-        "                    'dry_run','failed')"
-        " ORDER BY id DESC", (), path)
+        " AND LOWER(COALESCE(status,'')) NOT IN (%s)"
+        " ORDER BY id DESC" % placeholders, DEAD_STATUSES, path)
 
 
 def equity_curve(limit: int = 1000, path: str = DB_PATH) -> list[dict]:

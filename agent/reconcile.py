@@ -1,0 +1,275 @@
+"""
+reconcile.py - the broker is the source of truth, not our journal.
+
+WHY THIS MODULE EXISTS
+----------------------
+An unattended process restarts: the VPS reboots, Python crashes, a network
+call hangs, systemd restarts the unit mid-cycle. Before this module, a restart
+could open a duplicate position, because `risk.py` was fed an AccountState
+built entirely from `journal.open_spreads()`:
+
+    acct_state = risk.AccountState(open_positions=len(journal_rows), ...)
+
+The journal is a record of what this process BELIEVES it did. Those are not
+the same thing, and they come apart in exactly the situations a restart
+creates:
+
+  * Order submitted, process killed before `record_order` ran.
+      -> journal has no row; the agent sees no position and can open a second.
+  * Order submitted, the HTTP response never arrived.
+      -> `submit_credit_spread` caught the exception and journaled `failed`.
+         `open_spreads()` excludes `failed`, so the position is invisible to
+         the risk gates while being entirely real at the broker.
+  * Position closed at the broker (expiry, assignment, manual intervention).
+      -> journal still shows it open, blocking new trades that are fine.
+  * A position exists that this agent never created.
+      -> invisible to every risk gate.
+
+So: fetch positions and open orders from Alpaca, treat those as authoritative,
+and correct the journal to match. The journal remains the audit trail of
+DECISIONS; the broker decides what is actually held.
+
+WHAT "UNCERTAIN" MEANS
+----------------------
+A network timeout is not a rejection. If we do not know whether an order
+arrived, the safe assumption is that it DID - counting a position that does
+not exist costs us one skipped trade, while missing one that does exist can
+double a position. Uncertain orders are therefore counted as open risk until
+the broker says otherwise, and `resolve_uncertain()` looks them up by
+`client_order_id` on the next cycle.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass, field
+from datetime import date
+
+from agent import journal
+
+# Statuses that mean "this definitely never reached the broker".
+DEAD = {"canceled", "cancelled", "rejected", "expired", "dry_run"}
+# Statuses that mean "we do not know". Treated as live until proven otherwise.
+UNCERTAIN = {"uncertain", "failed", "none", ""}
+
+
+def deterministic_client_order_id(underlying: str, short_symbol: str,
+                                  long_symbol: str, contracts: int,
+                                  day: date | None = None) -> str:
+    """A client_order_id that is a pure function of the trade intent.
+
+    Alpaca rejects a duplicate client_order_id. That makes it the strongest
+    idempotency primitive available to us, and the previous timestamp-based id
+    (`alpha-<epoch_ms>`) threw it away: a retry after a timeout produced a NEW
+    id, so the broker had no way to recognise the resubmission.
+
+    Keyed on the calendar day so the same spread can legitimately be reopened
+    tomorrow, but a retry within the same session collides and is refused by
+    Alpaca rather than filled twice.
+    """
+    day = day or date.today()
+    seed = "%s|%s|%s|%s|%d" % (day.isoformat(), underlying, short_symbol,
+                              long_symbol, int(contracts))
+    return "vetoed-%s-%s" % (day.strftime("%Y%m%d"),
+                             hashlib.sha1(seed.encode()).hexdigest()[:12])
+
+
+@dataclass
+class BrokerState:
+    """What Alpaca says, right now."""
+
+    legs: dict = field(default_factory=dict)          # option symbol -> position
+    open_order_ids: set = field(default_factory=set)   # client_order_id
+    open_order_symbols: set = field(default_factory=set)
+    reachable: bool = True
+    error: str = ""
+
+
+@dataclass
+class Reconciliation:
+    open_spreads: list = field(default_factory=list)   # journal rows, broker-confirmed
+    corrections: list = field(default_factory=list)    # human-readable log lines
+    orphan_legs: list = field(default_factory=list)    # at broker, not in journal
+    uncertain: list = field(default_factory=list)      # status unknown, counted as live
+
+    @property
+    def open_count(self) -> int:
+        return len(self.open_spreads) + len(self.uncertain)
+
+
+def _leg_map(positions) -> dict:
+    out: dict = {}
+    if isinstance(positions, list):
+        for p in positions:
+            if isinstance(p, dict) and p.get("symbol"):
+                out[str(p["symbol"])] = p
+    return out
+
+
+def _order_ids(orders) -> tuple[set, set]:
+    """(client_order_ids, option symbols) across the broker's open orders."""
+    ids: set = set()
+    syms: set = set()
+    if isinstance(orders, list):
+        for o in orders:
+            if not isinstance(o, dict):
+                continue
+            if o.get("client_order_id"):
+                ids.add(str(o["client_order_id"]))
+            for leg in (o.get("legs") or []):
+                if isinstance(leg, dict) and leg.get("symbol"):
+                    syms.add(str(leg["symbol"]))
+            if o.get("symbol"):
+                syms.add(str(o["symbol"]))
+    return ids, syms
+
+
+async def fetch_broker_state(mcp) -> BrokerState:
+    """Positions and open orders. Failure is reported, never guessed around."""
+    try:
+        positions = await mcp.positions()
+        orders = await mcp.orders(status="open")
+    except Exception as exc:
+        return BrokerState(reachable=False,
+                           error="%s: %s" % (type(exc).__name__, exc))
+    ids, syms = _order_ids(orders)
+    return BrokerState(legs=_leg_map(positions), open_order_ids=ids,
+                       open_order_symbols=syms)
+
+
+def reconcile(state: BrokerState, rows: list[dict] | None = None,
+              path: str | None = None) -> Reconciliation:
+    """Correct the journal against the broker and report what is really open.
+
+    Pure apart from the journal writes, so it is testable without a broker.
+    """
+    rows = journal.open_spreads(**({"path": path} if path else {})) \
+        if rows is None else rows
+    r = Reconciliation()
+
+    if not state.reachable:
+        # Broker unreachable. Fall back to the journal and say so loudly -
+        # this is the one path where we are knowingly using weaker evidence.
+        r.open_spreads = list(rows)
+        r.corrections.append(
+            "BROKER UNREACHABLE (%s) - falling back to journal state; "
+            "no new position will be opened this cycle" % state.error[:120])
+        return r
+
+    for row in rows:
+        short_sym = row.get("short_symbol")
+        long_sym = row.get("long_symbol")
+        status = str(row.get("status") or "").lower()
+        oid = row.get("alpaca_order_id")
+        coid = row.get("client_order_id")
+
+        has_short = short_sym in state.legs
+        has_long = long_sym in state.legs
+        working = (coid and coid in state.open_order_ids) or \
+                  (short_sym in state.open_order_symbols)
+
+        if has_short and has_long:
+            r.open_spreads.append(row)                 # genuinely held
+            continue
+
+        if working:
+            r.open_spreads.append(row)                 # resting, not yet filled
+            r.corrections.append("%s: order still working at the broker"
+                                 % (short_sym or "?"))
+            continue
+
+        if status in UNCERTAIN:
+            # We never confirmed this reached Alpaca, and the broker shows no
+            # position and no working order. That is now evidence it did not
+            # arrive - but only because the broker WAS reachable.
+            r.corrections.append(
+                "%s: status %r and broker shows nothing - marking not-filled"
+                % (short_sym or "?", status or "none"))
+            if oid:
+                journal.update_order_status(oid, "not_filled",
+                                            **({"path": path} if path else {}))
+            continue
+
+        if has_short != has_long:
+            # One leg only. This is the dangerous state - a naked position.
+            r.open_spreads.append(row)
+            r.corrections.append(
+                "*** ONE LEG ONLY at broker for %s/%s - treating as open and "
+                "blocking new entries ***" % (short_sym, long_sym))
+            continue
+
+        # Filled once, now gone: expired, assigned, or closed elsewhere.
+        r.corrections.append("%s: no longer held at the broker - marking closed"
+                             % (short_sym or "?"))
+        if oid:
+            journal.close_order(oid, float(row.get("realised_pnl") or 0.0),
+                                **({"path": path} if path else {}))
+
+    # Legs the broker holds that no open journal row explains.
+    accounted = set()
+    for row in r.open_spreads:
+        accounted.add(row.get("short_symbol"))
+        accounted.add(row.get("long_symbol"))
+    for sym in state.legs:
+        if sym not in accounted:
+            r.orphan_legs.append(sym)
+    if r.orphan_legs:
+        r.corrections.append(
+            "%d option leg(s) held at the broker with no matching open journal "
+            "row: %s - counted toward concentration"
+            % (len(r.orphan_legs), ", ".join(sorted(r.orphan_legs)[:6])))
+    return r
+
+
+def account_state_from(reconciliation: Reconciliation, equity: float,
+                       options_buying_power: float, day_pnl: float,
+                       halted: bool = False):
+    """Build the risk AccountState from BROKER-CONFIRMED state.
+
+    Orphan legs are counted as half a spread each (two legs make one spread),
+    rounded up, so an unexplained holding still consumes concentration budget
+    rather than being silently free.
+    """
+    from agent import risk
+
+    rows = reconciliation.open_spreads
+    by_underlying: dict[str, int] = {}
+    open_risk = 0.0
+    for row in rows:
+        u = row.get("underlying") or "?"
+        by_underlying[u] = by_underlying.get(u, 0) + 1
+        open_risk += float(row.get("max_loss_total") or 0.0)
+
+    orphan_spreads = (len(reconciliation.orphan_legs) + 1) // 2
+    return risk.AccountState(
+        equity=equity,
+        options_buying_power=options_buying_power,
+        day_pnl=day_pnl,
+        open_positions=len(rows) + orphan_spreads,
+        open_risk=open_risk,
+        positions_by_underlying=by_underlying,
+        halted=halted,
+    )
+
+
+def already_working(state: BrokerState, candidate: dict,
+                    contracts: int, day: date | None = None) -> str:
+    """Pre-submit guard. Returns a reason string if this trade already exists.
+
+    Three independent checks, because each catches a different failure:
+      1. the deterministic client_order_id is already on a working order
+      2. the short leg is already held as a position
+      3. the short leg appears on any working order
+    """
+    short_sym = candidate.get("short_symbol")
+    long_sym = candidate.get("long_symbol")
+    coid = deterministic_client_order_id(
+        candidate.get("underlying", "?"), short_sym, long_sym, contracts, day)
+
+    if coid in state.open_order_ids:
+        return "an order with client_order_id %s is already working" % coid
+    if short_sym in state.legs:
+        return "%s is already held as a position" % short_sym
+    if short_sym in state.open_order_symbols:
+        return "%s already appears on a working order" % short_sym
+    return ""

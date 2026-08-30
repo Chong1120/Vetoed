@@ -1,0 +1,41 @@
+; Vetoed dashboard - READ-ONLY journal viewer and health endpoint.
+;
+; Optional. Install only if you want to check the agent over HTTP rather than
+; through `journalctl`. It has no route that can place, cancel, or modify an
+; order, and it imports neither the Alpaca SDK nor the MCP client.
+;
+; Bound to 127.0.0.1 on purpose. Reach it with an SSH tunnel:
+;     ssh -N -L 8000:127.0.0.1:8000 you@your-vps
+; then open http://localhost:8000
+;
+; Do not bind it to 0.0.0.0 without putting a reverse proxy and auth in front:
+; the page shows account equity and position detail.
+
+[Unit]
+Description=Vetoed dashboard (read-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vetoed
+Group=vetoed
+WorkingDirectory=/opt/vetoed
+ExecStart=/opt/vetoed/.venv/bin/python -m uvicorn dashboard.api:app \
+          --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vetoed-dash
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+; The viewer only ever reads the journal, but SQLite opens its database
+; read-write and creates -wal/-shm siblings, so the directory must be writable.
+ReadWritePaths=/opt/vetoed/journal
+
+[Install]
+WantedBy=multi-user.target

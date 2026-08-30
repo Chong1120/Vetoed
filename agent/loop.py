@@ -1,43 +1,158 @@
 """
-loop.py - the orchestrator. One cycle = screen -> think -> gate -> execute.
+loop.py - the orchestrator. One cycle = reconcile -> manage -> screen -> think
+-> gate -> execute.
 
 Order of operations matters and is deliberate:
 
-    1. MANAGE OPEN POSITIONS FIRST. Taking profits and closing before expiry
-       is what converts paper gains into REALISED P&L. Opening new trades
-       while ignoring existing ones is how an agent ends up holding losers
-       into expiry.
-    2. Snapshot equity to the journal (feeds the dashboard's equity curve).
-    3. Screen deterministically.
-    4. Ask the brain to select at most one candidate.
-    5. Run the risk gates. They can veto. They always size.
-    6. Execute via MCP, journal everything.
+    0. HARD LOCKS. Paper-trading is asserted before anything else, and a
+       cross-process lock guarantees only one cycle is ever in flight.
+    1. RECONCILE WITH THE BROKER. Alpaca decides what we hold, not our
+       journal. See reconcile.py for why this is not optional once the process
+       can restart.
+    2. MANAGE OPEN POSITIONS. Taking profits and closing before expiry is what
+       converts paper gains into REALISED P&L. Opening new trades while
+       ignoring existing ones is how an agent ends up holding losers into
+       expiry.
+    3. Snapshot equity to the journal (feeds the dashboard's equity curve).
+    4. Screen deterministically.
+    5. Ask the brain to select at most one candidate.
+    6. Run the risk gates. They can veto. They always size.
+    7. Execute via MCP under a deterministic client_order_id, and journal
+       everything.
 
 DRY RUN is the default. Nothing reaches the broker unless --live is passed.
+
+UNATTENDED OPERATION. `--schedule` runs this continuously on a VPS. Three
+things make that safe rather than merely possible: the broker reconciliation in
+step 1, the deterministic client_order_id in step 7 (Alpaca refuses a duplicate,
+so a retry after a timeout cannot fill twice), and the single-flight lock in
+step 0. `--force` is refused in combination with `--schedule`, because a
+scheduler that ignores market hours would trade weekend quotes forever.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import os
+import signal
 import sys
-from datetime import date, datetime
+import time
+from datetime import date, datetime, timezone
 
-from agent import adapt, brain, journal, risk
+from agent import adapt, brain, journal, reconcile, risk, runlock
 from agent.data import Market
 from agent.executor import AlpacaMCP, new_client_order_id
 from agent.screener import UNIVERSE, screen
 
 # Exit rules - these are what realise P&L inside a short contest window.
+# UNCHANGED by the unattended-operation work: an audit found no bug in them,
+# and loosening a risk parameter to suit a deployment would be backwards.
 TAKE_PROFIT_FRACTION = 0.50   # buy back at 50% of max profit
 STOP_LOSS_MULTIPLE = 2.0      # close if losing 2x the credit received
 CLOSE_AT_DTE = 1              # never carry into expiry day
 DELTA_STOP_MULTIPLE = 2.0     # short leg delta doubles -> price is coming at
                               # us; exit now rather than wait for -2x credit
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HEALTH_PATH = os.path.join(ROOT, "journal", "health.json")
 
-def log(msg: str) -> None:
-    print("[%s] %s" % (datetime.now().strftime("%H:%M:%S"), msg), flush=True)
+# 30 minutes is the default because a cycle's inputs barely move faster than
+# that: the screener reads a 20-day realised-vol estimate and an option chain
+# whose relevant Greeks drift slowly at 2-14 DTE. Polling faster does not
+# surface better trades, it just re-examines the same ones and burns API quota
+# and Claude calls. The interval is CONFIGURATION, not strategy - every gate,
+# threshold and exit rule is identical at any interval - which is why it is
+# safe to expose. Shorter intervals exist for demos, not for production.
+DEFAULT_POLL_MINUTES = 30
+MIN_POLL_MINUTES = 1
+MAX_POLL_MINUTES = 240
+
+_shutdown = False
+
+
+# --------------------------------------------------------------------------- #
+# logging - structured enough to grep in journalctl, plain enough to read
+# --------------------------------------------------------------------------- #
+
+def log(msg: str, level: str = "INFO") -> None:
+    print("%s %-5s %s" % (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                          level, msg), flush=True)
+
+
+def warn(msg: str) -> None:
+    log(msg, "WARN")
+
+
+def error(msg: str) -> None:
+    log(msg, "ERROR")
+
+
+# --------------------------------------------------------------------------- #
+# hard locks
+# --------------------------------------------------------------------------- #
+
+def assert_paper_trading() -> None:
+    """Fail closed. Called before the process does anything at all.
+
+    Already enforced inside data.load_keys() and executor._child_env(), but
+    those fire mid-cycle. On a server we want the unit to refuse to start,
+    visibly, rather than fail on the first order attempt hours later.
+    """
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(ROOT, ".env"))
+    flag = os.getenv("ALPACA_PAPER_TRADE", "").strip().lower()
+    if flag != "true":
+        raise SystemExit(
+            "REFUSING TO START: ALPACA_PAPER_TRADE is %r, expected 'true'.\n"
+            "Vetoed is paper-trading only. There is no live-capital mode and "
+            "this check is not overridable." % (flag or "<unset>"))
+
+
+def poll_interval_minutes() -> int:
+    """POLL_INTERVAL_MINUTES, clamped and validated."""
+    raw = os.getenv("POLL_INTERVAL_MINUTES", "").strip()
+    if not raw:
+        return DEFAULT_POLL_MINUTES
+    try:
+        val = int(raw)
+    except ValueError:
+        warn("POLL_INTERVAL_MINUTES=%r is not an integer - using %d"
+             % (raw, DEFAULT_POLL_MINUTES))
+        return DEFAULT_POLL_MINUTES
+    if not (MIN_POLL_MINUTES <= val <= MAX_POLL_MINUTES):
+        warn("POLL_INTERVAL_MINUTES=%d out of range [%d, %d] - using %d"
+             % (val, MIN_POLL_MINUTES, MAX_POLL_MINUTES, DEFAULT_POLL_MINUTES))
+        return DEFAULT_POLL_MINUTES
+    return val
+
+
+def write_health(**fields) -> None:
+    """A heartbeat the dashboard and an operator can both read.
+
+    Deliberately a file, not a socket: it survives the process dying, which is
+    exactly when you want to know what the last cycle did.
+    """
+    try:
+        os.makedirs(os.path.dirname(HEALTH_PATH), exist_ok=True)
+        current = {}
+        if os.path.exists(HEALTH_PATH):
+            try:
+                with open(HEALTH_PATH, encoding="utf-8") as fh:
+                    current = json.load(fh)
+            except Exception:
+                current = {}
+        current.update(fields)
+        current["updated_at"] = datetime.now(timezone.utc).isoformat(
+            timespec="seconds")
+        current["pid"] = os.getpid()
+        tmp = HEALTH_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(current, fh, indent=2, default=str)
+        os.replace(tmp, HEALTH_PATH)      # atomic; never a half-written file
+    except Exception as exc:
+        warn("could not write health file: %s" % exc)
 
 
 def entry_limit_price(credit: float) -> float:
@@ -54,27 +169,24 @@ def entry_limit_price(credit: float) -> float:
 # position management - runs BEFORE any new entry
 # --------------------------------------------------------------------------- #
 
-def _leg_map(positions) -> dict:
-    out = {}
-    if isinstance(positions, list):
-        for p in positions:
-            if isinstance(p, dict) and p.get("symbol"):
-                out[p["symbol"]] = p
-    return out
+async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool,
+                           legs: dict | None = None) -> list[str]:
+    """Close spreads that hit profit target, stop loss, or approach expiry.
 
-
-async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool) -> list[str]:
-    """Close spreads that hit profit target, stop loss, or approach expiry."""
+    `legs` may be supplied by the caller's reconciliation pass so the broker is
+    not queried twice in one cycle. Exit rules themselves are unchanged.
+    """
     actions: list[str] = []
     open_rows = journal.open_spreads()
     if not open_rows:
         return actions
 
-    try:
-        legs = _leg_map(await mcp.positions())
-    except Exception as exc:
-        log("could not fetch positions: %s" % exc)
-        return actions
+    if legs is None:
+        try:
+            legs = reconcile._leg_map(await mcp.positions())
+        except Exception as exc:
+            error("could not fetch positions: %s" % exc)
+            return actions
 
     for row in open_rows:
         short_sym, long_sym = row.get("short_symbol"), row.get("long_symbol")
@@ -128,7 +240,7 @@ async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool) -> list[str]:
             journal.close_order(row.get("alpaca_order_id") or "", unreal)
             log("  close order submitted: %s" % res.order.get("id"))
         else:
-            log("  close FAILED: %s" % res.error)
+            error("  close FAILED: %s" % res.error)
     return actions
 
 
@@ -153,42 +265,54 @@ def _expiry_of(occ_symbol: str | None) -> date | None:
 async def run_cycle(dry_run: bool = True, force: bool = False,
                     use_llm: bool = True) -> int:
     journal.init()
+    started = time.time()
     market = Market()
 
     is_open = market.is_market_open()
-    log("market open=%s  feed=%s  dry_run=%s" % (is_open, market.feed.value, dry_run))
+    log("cycle start  market_open=%s  feed=%s  dry_run=%s"
+        % (is_open, market.feed.value, dry_run))
+    write_health(market_open=is_open, feed=market.feed.value, dry_run=dry_run,
+                 cycle_state="running")
     if not is_open and not force:
-        log("market closed - no cycle. (use --force to run anyway)")
+        log("market closed - no cycle (use --force to run anyway)")
+        write_health(cycle_state="idle_market_closed", last_error="")
         return 0
 
     async with AlpacaMCP() as mcp:
-        # --- 1. manage what we already hold -------------------------------- #
-        closed = await manage_positions(mcp, market, dry_run)
+        # --- 1. reconcile against the broker ------------------------------- #
+        state = await reconcile.fetch_broker_state(mcp)
+        rec = reconcile.reconcile(state)
+        for note in rec.corrections:
+            warn("reconcile: %s" % note)
+        log("reconcile: %d open spread(s) confirmed, %d orphan leg(s)"
+            % (len(rec.open_spreads), len(rec.orphan_legs)))
 
-        # --- 2. account snapshot ------------------------------------------- #
+        # --- 2. manage what we already hold -------------------------------- #
+        closed = await manage_positions(mcp, market, dry_run,
+                                        legs=state.legs if state.reachable else None)
+
+        # --- 3. account snapshot, built from BROKER-confirmed state -------- #
         acct = await mcp.account()
         equity = float(acct.get("equity") or 0)
         last_equity = float(acct.get("last_equity") or equity)
-        open_rows = journal.open_spreads()
         journal.snapshot_equity(
             equity, last_equity, float(acct.get("cash") or 0),
-            float(acct.get("buying_power") or 0), len(open_rows))
+            float(acct.get("buying_power") or 0), rec.open_count)
 
-        acct_state = risk.AccountState(
-            equity=equity,
+        acct_state = reconcile.account_state_from(
+            rec, equity=equity,
             options_buying_power=float(acct.get("options_buying_power") or 0),
-            day_pnl=equity - last_equity,
-            open_positions=len(open_rows),
-            open_risk=sum(float(r.get("max_loss_total") or 0) for r in open_rows),
-            positions_by_underlying=_count_by(open_rows),
-        )
-        log("equity=$%.2f  day P&L=$%.2f  open=%d"
-            % (equity, acct_state.day_pnl, acct_state.open_positions))
+            day_pnl=equity - last_equity)
+        open_rows = rec.open_spreads
 
-        # --- 3. deterministic screen, under adaptive guardrails ------------ #
-        # Two passes: the first establishes the volatility regime, the second
-        # re-screens under the guardrails that regime implies. The circuit
-        # breaker (own-trade history) applies to both.
+        log("equity=$%.2f  day P&L=$%.2f  open=%d  open_risk=$%.0f"
+            % (equity, acct_state.day_pnl, acct_state.open_positions,
+               acct_state.open_risk))
+        write_health(equity=equity, day_pnl=acct_state.day_pnl,
+                     open_positions=acct_state.open_positions,
+                     open_risk=acct_state.open_risk)
+
+        # --- 4. deterministic screen, under adaptive guardrails ------------ #
         _, probe_ctx = screen(market, universe=UNIVERSE[:1])
         rails = adapt.build(probe_ctx)
         for note in rails.notes:
@@ -202,14 +326,26 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
         run_id = journal.start_run(
             is_open, ctx.get("feed"), equity, acct_state.day_pnl,
             acct_state.halted, len(cands),
-            note="; ".join(closed + rails.notes), context=ctx)
+            note="; ".join(closed + rails.notes + rec.corrections), context=ctx)
 
         if not cands:
             journal.record_decision(run_id, None, None, None,
                                     outcome="no candidates")
+            write_health(cycle_state="idle", last_cycle_outcome="no candidates",
+                         last_success=datetime.now(timezone.utc).isoformat(
+                             timespec="seconds"))
             return 0
 
-        # --- 4. judgement --------------------------------------------------- #
+        # A broker we cannot see is a broker we cannot safely add risk against.
+        if not state.reachable:
+            journal.record_decision(run_id, None, None, None,
+                                    outcome="broker unreachable")
+            error("broker state unavailable - managing only, no new entries")
+            write_health(cycle_state="degraded",
+                         last_error="broker unreachable: %s" % state.error[:200])
+            return 0
+
+        # --- 5. judgement --------------------------------------------------- #
         decision = brain.decide(
             cands, ctx,
             {"equity": equity, "day_pnl": acct_state.day_pnl,
@@ -217,7 +353,7 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
             open_rows, use_llm=use_llm)
         log("brain: %s (confidence %.2f)" % (decision.action, decision.confidence))
         if decision.error:
-            log("brain error: %s" % decision.error)
+            warn("brain error (fell back to deterministic): %s" % decision.error)
 
         if not decision.wants_trade:
             journal.record_decision(run_id, None, decision.to_dict(), None,
@@ -225,11 +361,14 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
                                     llm_error=decision.error,
                                     outcome="no trade")
             log("no trade: %s" % decision.rationale[:200])
+            write_health(cycle_state="idle", last_cycle_outcome="no trade",
+                         last_success=datetime.now(timezone.utc).isoformat(
+                             timespec="seconds"))
             return 0
 
         candidate = cands[decision.candidate_id]
 
-        # --- 5. hard gates -------------------------------------------------- #
+        # --- 6. hard gates -------------------------------------------------- #
         from agent.screener import SpreadCandidate
         rd = risk.evaluate(SpreadCandidate(**candidate), acct_state)
         log("risk: approved=%s contracts=%d" % (rd.approved, rd.contracts))
@@ -242,90 +381,195 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
             outcome="approved" if rd.approved else "vetoed")
 
         if not rd.approved:
+            write_health(cycle_state="idle", last_cycle_outcome="vetoed",
+                         last_success=datetime.now(timezone.utc).isoformat(
+                             timespec="seconds"))
             return 0
 
         if decision.contracts and decision.contracts != rd.contracts:
             log("note: model suggested %d contracts, risk sized %d (risk wins)"
                 % (decision.contracts, rd.contracts))
 
-        # --- 6. execute ----------------------------------------------------- #
+        # --- 7. idempotency guard, then execute ----------------------------- #
+        # Last line of defence before the only write path in the agent. Checks
+        # the broker, not the journal, because the journal is what a crash
+        # loses.
+        duplicate = reconcile.already_working(state, candidate, rd.contracts)
+        if duplicate:
+            warn("SKIPPING duplicate submission: %s" % duplicate)
+            journal.record_decision(run_id, candidate, decision.to_dict(),
+                                    rd.to_dict(), outcome="duplicate skipped")
+            write_health(cycle_state="idle",
+                         last_cycle_outcome="duplicate skipped")
+            return 0
+
         limit = entry_limit_price(float(candidate["credit"]))
-        log("ORDER: sell %s / buy %s  x%d  net credit limit $%.2f"
+        coid = reconcile.deterministic_client_order_id(
+            candidate["underlying"], candidate["short_symbol"],
+            candidate["long_symbol"], rd.contracts)
+        log("ORDER: sell %s / buy %s  x%d  net credit limit $%.2f  coid=%s"
             % (candidate["short_symbol"], candidate["long_symbol"],
-               rd.contracts, limit))
+               rd.contracts, limit, coid))
 
         if dry_run:
             log("DRY RUN - order NOT submitted")
             journal.record_order(decision_id, candidate, rd.contracts, limit,
                                  rd.max_loss_total,
-                                 {"id": None, "status": "dry_run"})
+                                 {"id": None, "status": "dry_run",
+                                  "client_order_id": coid})
+            write_health(cycle_state="idle", last_cycle_outcome="dry run order",
+                         last_success=datetime.now(timezone.utc).isoformat(
+                             timespec="seconds"))
             return 0
 
-        res = await mcp.submit_credit_spread(
-            candidate, rd.contracts, limit,
-            client_order_id=new_client_order_id())
+        res = await mcp.submit_credit_spread(candidate, rd.contracts, limit,
+                                             client_order_id=coid)
         if res.ok:
             log("submitted: order id %s status %s"
                 % (res.order.get("id"), res.order.get("status")))
+            payload = res.order
+        elif res.uncertain:
+            # The critical branch. We do NOT know whether Alpaca received
+            # this. Journal it as uncertain so open_spreads() counts it as
+            # live risk, and let the next cycle's reconciliation resolve it
+            # against the broker. NEVER retry here - a blind retry is exactly
+            # how a timeout becomes a double position.
+            error("SUBMIT UNCERTAIN (not retried): %s" % res.error)
+            payload = {"status": "uncertain", "error": res.error,
+                       "client_order_id": coid}
         else:
-            log("SUBMIT FAILED: %s" % res.error)
+            error("SUBMIT REJECTED: %s" % res.error)
+            payload = {"status": "failed", "error": res.error,
+                       "client_order_id": coid}
+
         journal.record_order(decision_id, candidate, rd.contracts, limit,
-                             rd.max_loss_total,
-                             res.order if res.ok else {"status": "failed",
-                                                       "error": res.error})
+                             rd.max_loss_total, payload)
+        write_health(cycle_state="idle",
+                     last_cycle_outcome=("submitted" if res.ok else
+                                         "uncertain" if res.uncertain else "rejected"),
+                     last_success=datetime.now(timezone.utc).isoformat(
+                         timespec="seconds"))
+    log("cycle done in %.1fs" % (time.time() - started))
     return 0
-
-
-def _count_by(rows: list[dict]) -> dict[str, int]:
-    out: dict[str, int] = {}
-    for r in rows:
-        u = r.get("underlying") or "?"
-        out[u] = out.get(u, 0) + 1
-    return out
 
 
 # --------------------------------------------------------------------------- #
 
+async def guarded_cycle(dry_run: bool, force: bool, use_llm: bool) -> int:
+    """One cycle under the single-flight lock. Never raises."""
+    try:
+        with runlock.single_flight(on_stale=warn):
+            return await run_cycle(dry_run, force, use_llm)
+    except runlock.LockBusy as exc:
+        warn("skipping tick: %s" % exc)
+        return 0
+    except SystemExit:
+        raise
+    except Exception as exc:
+        error("CYCLE FAILED: %s: %s" % (type(exc).__name__, exc))
+        write_health(cycle_state="error",
+                     last_error="%s: %s" % (type(exc).__name__, exc))
+        return 1
+
+
+def _install_signal_handlers(sched=None) -> None:
+    """systemd stops a unit with SIGTERM. Exit cleanly so the lock is freed."""
+    def handler(signum, _frame):
+        global _shutdown
+        _shutdown = True
+        log("received %s - shutting down after the current cycle"
+            % signal.Signals(signum).name)
+        write_health(cycle_state="stopping")
+        if sched is not None:
+            try:
+                sched.shutdown(wait=False)
+            except Exception:
+                pass
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, handler)
+        except (ValueError, OSError):
+            pass          # not the main thread, or unsupported on this platform
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Alpha options agent")
+    ap = argparse.ArgumentParser(description="Vetoed - options agent")
     ap.add_argument("--live", action="store_true",
                     help="ACTUALLY SUBMIT ORDERS (default is dry run)")
     ap.add_argument("--force", action="store_true",
-                    help="run even when the market is closed")
+                    help="run one cycle even when the market is closed "
+                         "(refused together with --schedule)")
     ap.add_argument("--schedule", action="store_true",
                     help="run continuously on a schedule")
     ap.add_argument("--no-llm", action="store_true",
                     help="skip Claude entirely; use deterministic selection")
     args = ap.parse_args()
 
+    # Fail closed, before anything else touches the network.
+    assert_paper_trading()
+
     dry_run = not args.live
     if args.live:
-        log("*** LIVE MODE - orders WILL be submitted to the paper account ***")
+        log("*** LIVE MODE - orders WILL be submitted to the PAPER account ***")
 
     if not args.schedule:
-        return asyncio.run(run_cycle(dry_run, args.force, not args.no_llm))
+        _install_signal_handlers()
+        return asyncio.run(guarded_cycle(dry_run, args.force, not args.no_llm))
+
+    # --force exists to test a single cycle against a closed market. Combined
+    # with --schedule it would mean "trade on stale weekend quotes, forever",
+    # which is not a thing anyone wants running unattended.
+    if args.force:
+        raise SystemExit(
+            "REFUSING TO START: --force cannot be combined with --schedule.\n"
+            "--force bypasses the market-open check, which is a debugging aid "
+            "for one cycle, not a mode of unattended operation.")
 
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.cron import CronTrigger
 
+    minutes = poll_interval_minutes()
     sched = BlockingScheduler(timezone="America/New_York")
+    _install_signal_handlers(sched)
 
     def job():
-        try:
-            asyncio.run(run_cycle(dry_run, args.force, not args.no_llm))
-        except Exception as exc:
-            log("CYCLE FAILED: %s: %s" % (type(exc).__name__, exc))
+        if _shutdown:
+            return
+        asyncio.run(guarded_cycle(dry_run, False, not args.no_llm))
 
-    # US market hours, weekdays. Entries in the first half of the session,
-    # management passes through to the close.
-    sched.add_job(job, CronTrigger(day_of_week="mon-fri", hour="10-15",
-                                   minute="0,30"), id="cycle")
-    log("scheduler started (America/New_York, weekdays 10:00-15:30 every 30m)")
-    log("dry_run=%s   Ctrl-C to stop" % dry_run)
+    # The cron window is a coarse filter in US Eastern time - never the local
+    # clock of whatever VPS this runs on. The AUTHORITATIVE market-open check
+    # is Alpaca's own clock inside run_cycle(), which handles holidays and
+    # early closes that a cron expression cannot.
+    sched.add_job(
+        job,
+        CronTrigger(day_of_week="mon-fri", hour="9-16",
+                    minute="*/%d" % minutes if minutes < 60 else "0"),
+        id="cycle",
+        max_instances=1,        # belt; runlock.py is the braces
+        coalesce=True,          # a backlog after a pause runs once, not N times
+        misfire_grace_time=120,
+    )
+
+    log("=" * 68)
+    log("Vetoed scheduler started")
+    log("  poll interval : %d minute(s)   [POLL_INTERVAL_MINUTES]" % minutes)
+    log("  window        : Mon-Fri 09:00-16:59 America/New_York (coarse)")
+    log("  authoritative : Alpaca clock, checked every cycle")
+    log("  mode          : %s" % ("LIVE (paper account)" if args.live else "DRY RUN"))
+    log("  brain         : %s" % ("deterministic only" if args.no_llm else "Claude + fallback"))
+    log("  pid           : %d" % os.getpid())
+    log("=" * 68)
+    write_health(cycle_state="starting", poll_interval_minutes=minutes,
+                 dry_run=dry_run, started_at=datetime.now(timezone.utc)
+                 .isoformat(timespec="seconds"), last_error="")
+
     try:
         sched.start()
     except (KeyboardInterrupt, SystemExit):
-        log("scheduler stopped")
+        pass
+    log("scheduler stopped")
+    write_health(cycle_state="stopped")
     return 0
 
 

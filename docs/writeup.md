@@ -151,7 +151,7 @@ not of whether the model answered.
 1 DTE, or **short-leg delta doubling** — an early warning that converts some
 max-losses into partial losses.
 
-**144 tests**, covering every gate that must never fail open: missing long leg,
+**184 tests**, covering every gate that must never fail open: missing long leg,
 long strike on the wrong side, tampered `max_loss`, flipped legs, and the model
 attempting to influence size.
 

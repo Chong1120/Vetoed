@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Files that are executed on Linux must keep LF endings regardless of the
+# platform they were authored on. A CRLF shebang makes bash fail with
+# "bad interpreter: /usr/bin/env bash^M", and systemd will not parse a unit
+# file with carriage returns.
+*.sh            text eol=lf
+*.service       text eol=lf
+Dockerfile      text eol=lf

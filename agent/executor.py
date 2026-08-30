@@ -81,11 +81,32 @@ def _unwrap(text: str) -> Any:
     return payload
 
 
+# Errors that mean the broker definitely saw the order and said no. Anything
+# else - a timeout, a dropped connection, a killed subprocess - is UNKNOWN,
+# and an unknown order may well be resting or filled.
+_DEFINITE_REJECTION = ("rejected", "invalid", "insufficient", "not tradable",
+                       "forbidden", "unauthorized", "bad request",
+                       "unprocessable", "duplicate")
+
+
 @dataclass
 class OrderResult:
     ok: bool
     order: dict
     error: str = ""
+    uncertain: bool = False
+    """True when we do not know whether the order reached Alpaca.
+
+    This distinction is the difference between a skipped trade and a doubled
+    one. A timeout is not a rejection: journalling it as `failed` would hide a
+    real position from the risk gates, because open_spreads() excludes failed
+    orders. Uncertain orders are journalled as `uncertain` and counted as live
+    until reconcile.py confirms otherwise against the broker."""
+
+
+def _is_definite_rejection(exc: Exception) -> bool:
+    text = ("%s %s" % (type(exc).__name__, exc)).lower()
+    return any(marker in text for marker in _DEFINITE_REJECTION)
 
 
 class AlpacaMCP:
@@ -193,12 +214,18 @@ class AlpacaMCP:
         try:
             out = await self.call("place_option_order", args)
         except Exception as exc:
-            return OrderResult(False, {}, "%s: %s" % (type(exc).__name__, exc))
+            definite = _is_definite_rejection(exc)
+            return OrderResult(
+                False, {"client_order_id": client_order_id},
+                "%s: %s" % (type(exc).__name__, exc),
+                uncertain=not definite)
 
         if isinstance(out, dict) and out.get("id"):
             return OrderResult(True, out)
+        # A response we cannot parse is not a rejection either.
         return OrderResult(False, out if isinstance(out, dict) else {},
-                           "unexpected response: %s" % str(out)[:400])
+                           "unexpected response: %s" % str(out)[:400],
+                           uncertain=True)
 
 
     async def close_credit_spread(self, short_symbol: str, long_symbol: str,
