@@ -33,10 +33,14 @@ So this module uses BOTH measures deliberately:
     credit received  <- the market quote          (risk-neutral, has the premium)
     probability      <- 20-day realised volatility (real-world)
 
-`ev_rn` is computed from delta and should hover near zero for fair quotes.
-`ev_rw` is computed from realised vol and is what we actually rank on. The
-DIFFERENCE between them is the volatility risk premium we are harvesting,
-which makes the edge an explicit, inspectable number instead of an assumption.
+    ev_rn            <- that credit priced at the market's IMPLIED volatility
+    ev_rw            <- that credit priced at 20-day REALISED volatility
+
+Both EVs run through ONE probability model and differ only in the volatility
+fed into it. That is the whole point: `vrp_edge = ev_rw - ev_rn` then isolates
+exactly the implied-minus-realised gap - the premium being harvested - and
+correctly reads ~0 when implied and realised agree, i.e. when there is no
+premium to harvest. `ev_rw` is what we rank on.
 """
 
 from __future__ import annotations
@@ -87,8 +91,6 @@ MAX_CREDIT_RATIO = 0.60
 MIN_EV_RW = 1.00        # dollars per spread, real-world measure
 MAX_CANDIDATES = 8
 
-TRADING_DAYS = 252.0
-
 
 # --------------------------------------------------------------------------- #
 
@@ -112,9 +114,9 @@ class SpreadCandidate:
     short_delta: float
     long_delta: float
     pop: float                # real-world probability of profit
-    pop_rn: float             # risk-neutral (delta-derived), for comparison
+    pop_rn: float             # risk-neutral (implied-vol), for comparison
     ev: float                 # real-world EV - what we rank on
-    ev_rn: float              # risk-neutral EV - ~0 for fair quotes
+    ev_rn: float              # same spread priced at implied vol
     vrp_edge: float           # ev - ev_rn: the premium being harvested
     short_iv: float | None
     realized_vol: float
@@ -139,9 +141,9 @@ def norm_cdf(x: float) -> float:
 def prob_below(spot: float, strike: float, vol: float, years: float) -> float:
     """Real-world P(S_T < K) under driftless lognormal returns.
 
-    Deliberately uses REALISED volatility, not implied. Implied vol carries
-    the risk premium; using it here would just reproduce the risk-neutral
-    answer and show no edge.
+    The CALLER chooses the volatility. Pass realised vol for the real-world
+    measure, implied vol for the risk-neutral one. Running both through this
+    same function is what makes their difference mean something.
     """
     if spot <= 0 or strike <= 0 or vol <= 0 or years <= 0:
         return float("nan")
@@ -153,15 +155,21 @@ def _three_point_ev(p_short_itm: float, p_long_itm: float,
                     max_profit: float, max_loss: float) -> tuple[float, float]:
     """(EV, probability of profit) for a vertical credit spread.
 
-        beyond neither strike -> keep the full credit
-        between the strikes   -> partial loss, ~half of max on average
-        beyond both strikes   -> full max loss
+        beyond neither strike -> keep the full credit   (+max_profit)
+        between the strikes   -> payoff runs LINEARLY from +max_profit at the
+                                 short strike to -max_loss at the long strike
+        beyond both strikes   -> full max loss          (-max_loss)
+
+    The middle band is the easy one to get wrong. The payoff there is NOT
+    "about half the max loss" - at the short strike the spread still expires
+    for the entire credit. Averaging the linear payoff across the band gives
+    (max_profit - max_loss) / 2, which is what is used below.
     """
     p_win = 1.0 - p_short_itm
     p_partial = max(p_short_itm - p_long_itm, 0.0)
     p_maxloss = p_long_itm
     ev = (p_win * max_profit
-          - p_partial * max_loss * 0.5
+          + p_partial * (max_profit - max_loss) * 0.5
           - p_maxloss * max_loss)
     return ev, p_win
 
@@ -231,25 +239,41 @@ def _build_spreads(snap: MarketSnapshot, right: str) -> list[SpreadCandidate]:
             if max_loss <= 0:
                 continue
 
-            # --- risk-neutral view: delta as probability ------------------ #
-            ev_rn, pop_rn = _three_point_ev(
-                short.abs_delta, long_leg.abs_delta, max_profit, max_loss)
-
-            # --- real-world view: realised volatility --------------------- #
             years = max(short.dte, 1) / 365.0
-            if right == "put":
-                p_short = prob_below(spot, short.strike, vol, years)
-                p_long = prob_below(spot, long_strike, vol, years)
-            else:
-                p_short = 1.0 - prob_below(spot, short.strike, vol, years)
-                p_long = 1.0 - prob_below(spot, long_strike, vol, years)
+
+            def _probs(v: float) -> tuple[float, float]:
+                """(P short breached, P long breached) at volatility `v`."""
+                ps = prob_below(spot, short.strike, v, years)
+                pl = prob_below(spot, long_strike, v, years)
+                return (ps, pl) if right == "put" else (1.0 - ps, 1.0 - pl)
+
+            # --- real-world view: 20-day realised volatility -------------- #
+            p_short, p_long = _probs(vol)
             if math.isnan(p_short) or math.isnan(p_long):
                 continue
-
             ev_rw, pop_rw = _three_point_ev(p_short, p_long,
                                             max_profit, max_loss)
             if ev_rw < MIN_EV_RW:
                 continue
+
+            # --- risk-neutral view: the market's own implied volatility --- #
+            # NOT delta. Delta is N(d1); the probability of finishing in the
+            # money is N(d2). They differ by ~sigma*sqrt(T), which at 14 DTE is
+            # worth several dollars of EV - more than MIN_EV_RW itself. Pricing
+            # ev_rn off delta while ev_rw came from a lognormal made vrp_edge
+            # report a premium even when implied == realised, i.e. when there
+            # was demonstrably no premium. Same model both sides, vol is the
+            # only thing that changes.
+            iv = short.iv if (short.iv is not None and short.iv > 0) else None
+            p_short_rn, p_long_rn = (float("nan"), float("nan"))
+            if iv is not None:
+                p_short_rn, p_long_rn = _probs(iv)
+            if math.isnan(p_short_rn) or math.isnan(p_long_rn):
+                # No usable IV. Fall back to delta and wear the bias rather
+                # than discard an otherwise valid candidate.
+                p_short_rn, p_long_rn = short.abs_delta, long_leg.abs_delta
+            ev_rn, pop_rn = _three_point_ev(p_short_rn, p_long_rn,
+                                            max_profit, max_loss)
 
             worst_spread = max(short.spread_pct, long_leg.spread_pct)
             min_oi = min(short.open_interest, long_leg.open_interest)

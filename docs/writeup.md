@@ -43,23 +43,38 @@ So `screener.py` computes EV under **two different probability measures**:
 | Quantity | Measure | Source |
 |---|---|---|
 | Credit received | risk-neutral | the market quote (contains the premium) |
-| Probability of loss | **real-world** | 20-day realised volatility |
+| `ev_rn` | risk-neutral | the market's own **implied** volatility |
+| `ev_rw` | **real-world** | 20-day **realised** volatility |
 
 ```
 p(keep credit)  = 1 − P(short strike breached)
-p(partial loss) = P(short breached) − P(long breached)   → ~½ max loss
+p(partial loss) = P(short breached) − P(long breached)
 p(max loss)     = P(long strike breached)
 
-ev_rn  ← delta            (should hover near zero for fair quotes)
-ev_rw  ← realised vol     (what we actually rank on)
-vrp_edge = ev_rw − ev_rn  ← the premium being harvested, as a number
+between the strikes the payoff runs linearly +max_profit → −max_loss,
+so its expectation is (max_profit − max_loss) / 2
+
+ev_rn  ← that spread priced at IMPLIED vol
+ev_rw  ← that spread priced at REALISED vol   (what we rank on)
+vrp_edge = ev_rw − ev_rn  ← implied-minus-realised, in dollars
 ```
 
-Live output confirms the theory: risk-neutral EVs cluster around zero
-(−8.10, −1.53, +0.41, +3.21) while real-world EVs are positive. AAPL, with
-implied 23.8% against realised 18.9%, showed the largest edge at **$29.92**.
-QQQ — implied *below* realised — produced **zero candidates** and correctly
-sat out.
+**One model, one variable — and that is a correction.** Both EVs run through
+the same lognormal; the only input that differs is the volatility. An earlier
+build computed `ev_rn` from *delta* instead. Delta is N(d₁), while the
+probability of finishing in the money is N(d₂); the two differ by roughly
+σ√T, which at 12 DTE is worth several dollars of EV — more than the $1.00
+acceptance threshold itself. The metric therefore reported a premium where
+none existed. Journal run 3 traded IWM at implied 14.84% against realised
+14.58% — a ratio of 1.018, meaning essentially **no** premium was on offer —
+and still printed `vrp_edge = 2.75`. Of that, $2.36 was model mismatch. Priced
+through one model it reads **$0.34**.
+
+Five tests in `test_screener_math.py` now pin the invariant that would have
+caught it: equal implied and realised must yield **zero** edge, implied *below*
+realised must yield a **negative** one, and delta must not be mistaken for a
+probability. This is also why QQQ — implied below realised — produces **zero
+candidates** and correctly sits out.
 
 ## 3. Architecture
 

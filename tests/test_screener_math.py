@@ -4,7 +4,11 @@ import math
 
 import pytest
 
-from agent.screener import _three_point_ev, norm_cdf, prob_below
+from datetime import date, datetime
+
+from agent.data import MarketSnapshot, OptionRow
+from agent.screener import (_build_spreads, _three_point_ev, norm_cdf,
+                            prob_below)
 
 
 # --------------------------------------------------------------------------- #
@@ -119,3 +123,80 @@ def test_real_world_beats_risk_neutral_when_iv_exceeds_realised():
 
     assert p_short_rw < p_short_rn      # realised implies a safer world
     assert ev_rw > ev_rn                # so the trade is worth more
+
+
+# --------------------------------------------------------------------------- #
+# regression: vrp_edge must measure the PREMIUM, not the model mismatch
+# --------------------------------------------------------------------------- #
+
+def _chain(iv: float):
+    """A minimal IWM-shaped chain holding one valid 300/301 call spread."""
+    exp = date(2026, 9, 11)
+    common = dict(underlying="IWM", right="call", expiry=exp, dte=12,
+                  open_interest=4836, gamma=0.0, theta=0.0, vega=0.0, iv=iv)
+    return [
+        OptionRow(symbol="IWM260911C00300000", strike=300.0,
+                  bid=0.49, ask=0.51, delta=0.3184, **common),
+        OptionRow(symbol="IWM260911C00301000", strike=301.0,
+                  bid=0.155, ask=0.175, delta=0.2718, **common),
+    ]
+
+
+def _snapshot(iv: float, realised: float) -> MarketSnapshot:
+    return MarketSnapshot(symbol="IWM", spot=295.74, realized_vol=realised,
+                          sma20=293.0, rows=_chain(iv), feed="indicative",
+                          asof=datetime(2026, 8, 30, 6, 2, 43))
+
+
+def test_no_premium_is_reported_when_implied_equals_realised():
+    """The bug this rewrite exists to kill.
+
+    Journal run 3 traded IWM with implied 14.84% against realised 14.58% - a
+    ratio of 1.018, meaning essentially NO volatility risk premium was on
+    offer. It still reported vrp_edge = 2.75, because ev_rn came from delta
+    (N(d1)) while ev_rw came from a lognormal (N(d2)-shaped). Those disagree
+    even at identical volatility, so the "premium" was 86% model mismatch.
+
+    Same vol on both sides must mean no edge. If this test ever fails, the two
+    measures have drifted onto different models again.
+    """
+    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call")
+    assert c.vrp_edge == pytest.approx(0.0, abs=0.01)
+    assert c.ev == pytest.approx(c.ev_rn, abs=0.01)
+
+
+def test_premium_appears_only_when_implied_exceeds_realised():
+    """Rich implied vol must produce a positive, monotonically larger edge."""
+    edges = [_build_spreads(_snapshot(iv=iv, realised=0.147), "call")[0].vrp_edge
+             for iv in (0.147, 0.18, 0.25)]
+    assert edges[0] == pytest.approx(0.0, abs=0.01)
+    assert edges == sorted(edges)
+    assert edges[-1] > 1.0
+
+
+def test_cheap_implied_vol_produces_a_negative_edge():
+    """Implied BELOW realised means we would be selling vol too cheap."""
+    [c] = _build_spreads(_snapshot(iv=0.10, realised=0.147), "call")
+    assert c.vrp_edge < 0
+
+
+def test_delta_is_not_the_itm_probability():
+    """Why ev_rn cannot be computed from delta.
+
+    Delta is N(d1); P(finishing ITM) is N(d2). The gap is ~sigma*sqrt(T) and at
+    12 DTE it is worth more EV than MIN_EV_RW, so it cannot be waved away.
+    """
+    [c] = _build_spreads(_snapshot(iv=0.147, realised=0.147), "call")
+    p_itm_model = 1.0 - c.pop_rn
+    assert abs(p_itm_model - abs(c.short_delta)) > 0.01
+
+
+def test_partial_region_averages_the_linear_payoff():
+    """Between the strikes the payoff runs +max_profit -> -max_loss.
+
+    The midpoint is (max_profit - max_loss)/2, NOT -max_loss/2: at the short
+    strike the spread still expires for the whole credit.
+    """
+    mp, ml = 120.0, 380.0
+    ev, _ = _three_point_ev(1.0, 0.0, mp, ml)   # all probability in the band
+    assert ev == pytest.approx((mp - ml) / 2)

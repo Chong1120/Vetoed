@@ -50,9 +50,13 @@ So the screener computes EV under **two measures**:
 | Probability of loss | **real-world** | 20-day realised volatility |
 
 `vrp_edge = ev_rw − ev_rn` is the premium being harvested, as an inspectable
-number. Live output behaves exactly as theory predicts: risk-neutral EVs cluster
-near zero while real-world EVs are positive, and underlyings whose implied vol
-sits *below* realised produce **no candidates at all**.
+number. Crucially **both EVs go through one model and differ only in the
+volatility fed to it** — `ev_rn` uses the market's implied vol, `ev_rw` uses
+20-day realised. Anything else measures the gap between two formulas rather
+than the premium: delta is N(d₁), not the N(d₂) probability of finishing ITM,
+and pricing one side off delta reported an edge on trades that had none (see
+`docs/writeup.md` §2). Underlyings whose implied vol sits *below* realised
+produce **no candidates at all**.
 
 ## Architecture
 
