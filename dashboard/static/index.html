@@ -476,9 +476,17 @@ function positions(rows, broker) {
 
   if (broker.length) {
     const pnl = broker.reduce((a, b) => a + (Number(b.unrealised) || 0), 0);
+    // Say WHEN. These are Alpaca's own numbers, read at the last cycle - not
+    // a live feed, because this page is a static snapshot so the URL never
+    // sleeps. Options reprice by the second, so a reader comparing this to an
+    // open Alpaca tab will see different figures and reasonably conclude the
+    // page is wrong. It is not wrong, it is timestamped, and it should say so.
+    const asOf = broker[0] && broker[0].ts ? shortTs(broker[0].ts) : null;
     html += `<div class="sub" style="margin:18px 0 8px">
         Held at Alpaca &middot; ${broker.length} leg(s) &middot;
         unrealised <span class="${pnl < 0 ? "neg" : "pos"}">${money(pnl)}</span>
+        ${asOf ? `<span class="dim">&middot; as read at ${esc(asOf)} UTC,
+          not live &mdash; Alpaca will differ as prices move</span>` : ""}
       </div>
       <table><thead><tr>
         <th>Contract</th><th>Qty</th><th>Avg price</th>
