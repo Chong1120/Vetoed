@@ -220,6 +220,20 @@ def update_order_status(alpaca_order_id: str, status: str,
             (status, filled_qty, fill_price, alpaca_order_id))
 
 
+def set_decision_outcome(decision_id: int, outcome: str,
+                         path: str = DB_PATH) -> None:
+    """Correct a decision's outcome in place.
+
+    A cycle reaches ONE judgement. When something downstream changes what
+    became of it, that is the same decision resolving differently - not a
+    second decision. Inserting a new row for it double-counts the cycle and
+    makes the page show every judgement twice.
+    """
+    with connect(path) as c:
+        c.execute("UPDATE decisions SET outcome=? WHERE id=?",
+                  (outcome, decision_id))
+
+
 def close_order(alpaca_order_id: str, realised_pnl: float,
                 path: str = DB_PATH) -> None:
     with connect(path) as c:

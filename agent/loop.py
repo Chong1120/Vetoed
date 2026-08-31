@@ -348,6 +348,24 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
         cands = [c.to_dict() for c in shortlist]
         log("screener returned %d candidates" % len(cands))
 
+        # Drop candidates whose legs are ALREADY held. The idempotency guard
+        # catches these at the very last moment, which is correct as a defence
+        # but wasteful as a policy: the model kept choosing the identical AAPL
+        # spread it was already in, the guard refused it, and the cycle ended
+        # having done nothing. Adding to a position is not what "a second
+        # position in this underlying" is meant to allow - different strikes
+        # are. Removing them here lets the model choose something it can
+        # actually take.
+        if state.reachable and state.legs:
+            held = set(state.legs)
+            before = len(cands)
+            cands = [c for c in cands
+                     if not (c["short_symbol"] in held
+                             and c["long_symbol"] in held)]
+            if len(cands) != before:
+                log("dropped %d candidate(s) already held at the broker"
+                    % (before - len(cands)))
+
         run_id = journal.start_run(
             is_open, ctx.get("feed"), equity, acct_state.day_pnl,
             acct_state.halted, len(cands),
@@ -422,8 +440,10 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
         duplicate = reconcile.already_working(state, candidate, rd.contracts)
         if duplicate:
             warn("SKIPPING duplicate submission: %s" % duplicate)
-            journal.record_decision(run_id, candidate, decision.to_dict(),
-                                    rd.to_dict(), outcome="duplicate skipped")
+            # Correct the decision already recorded above. Recording a second
+            # one would double-count a single cycle's judgement, which is
+            # exactly what put every decision on the dashboard twice.
+            journal.set_decision_outcome(decision_id, "duplicate skipped")
             write_health(cycle_state="idle",
                          last_cycle_outcome="duplicate skipped")
             return 0

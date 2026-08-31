@@ -89,3 +89,20 @@ def test_uncertain_is_still_live_risk(db):
     # makes 'uncertain' unsafe to exclude. Pin both together.
     _order(db, "uncertain", None)
     assert len(journal.open_spreads(path=db)) == 1
+
+
+def test_a_decision_outcome_is_corrected_not_duplicated(db):
+    """One cycle, one decision row - however its outcome resolves.
+
+    The duplicate guard used to record a SECOND decision when it refused a
+    submission, so every affected cycle appeared twice on the dashboard: once
+    approved, once 'duplicate skipped'. One judgement, one row.
+    """
+    run = journal.start_run(True, "indicative", 100000.0, 0.0, False, 5, path=db)
+    did = journal.record_decision(run, {"underlying": "AAPL"}, None, None,
+                                  outcome="approved", path=db)
+    journal.set_decision_outcome(did, "duplicate skipped", path=db)
+
+    rows = journal.recent_decisions(path=db)
+    assert len(rows) == 1, "the cycle must not appear twice"
+    assert rows[0]["outcome"] == "duplicate skipped"
