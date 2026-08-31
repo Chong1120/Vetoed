@@ -19,6 +19,7 @@ dashboard, and it is why nothing here can act on the account.
 Deploy target: Vercel (api/live.py -> /api/live). Stdlib only, no build.
 """
 
+import datetime
 import json
 import os
 import urllib.error
@@ -73,6 +74,10 @@ def build():
 
     return 200, {
         "available": True,
+        # When the account was actually read. The page shows this, so a stale
+        # or cached answer is visible rather than being passed off as current.
+        "fetched_at": datetime.datetime.now(
+            datetime.timezone.utc).replace(microsecond=0).isoformat(),
         "equity": _num(acct.get("equity")),
         "last_equity": _num(acct.get("last_equity")),
         "cash": _num(acct.get("cash")),

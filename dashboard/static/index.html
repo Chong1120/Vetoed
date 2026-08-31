@@ -296,18 +296,26 @@ async function get(key, query = "") {
 }
 
 /* ------------------------------------------------------------------ */
-function status(summary, runs) {
+function status(summary, runs, live) {
   const run = summary.last_run || runs[0] || null;
   const feed = run?.feed || "unknown";
   const bits = [];
-  
-  if (MODE === "frozen") {
-    bits.push(`<span class="pill on"><span class="dot live"></span>auto-sync active</span>`);
-    if (SNAP && SNAP.generated_at) {
-      bits.push(`<span class="pill">data &middot; ${esc(shortTs(SNAP.generated_at))} UTC</span>`);
-    }
+
+  // Two clocks, and they are not the same thing. The ACCOUNT is re-read every
+  // 30 seconds; the JOURNAL only changes when a cycle publishes. Showing just
+  // the journal's timestamp made a working page look frozen - the most
+  // prominent time on the header was the one that moves least.
+  if (live) {
+    bits.push(`<span class="pill on"><span class="dot live"></span>`
+      + `account live &middot; ${esc(shortTs(live.fetched_at || new Date().toISOString()))} UTC</span>`);
+  } else if (MODE === "frozen") {
+    bits.push(`<span class="pill warn">account &middot; snapshot only</span>`);
   } else if (MODE === "live") {
     bits.push(`<span class="pill on"><span class="dot live"></span>live broker</span>`);
+  }
+
+  if (MODE === "frozen" && SNAP && SNAP.generated_at) {
+    bits.push(`<span class="pill">journal &middot; ${esc(shortTs(SNAP.generated_at))} UTC</span>`);
   }
   
   bits.push(`<span class="pill info">${esc(feed)} feed</span>`);
@@ -359,7 +367,8 @@ function kpis(s, orders, broker, live) {
     ["Win rate", wr == null ? NB : wr.toFixed(0) + "%", wr == null ? "" : (wr >= 80 ? "pos" : "neg"),
      closed.length ? `${wins} of ${closed.length}` : "needs closed trades"],
     ["Unrealised P&amp;L", unreal == null ? NB : signed(unreal), cls(unreal),
-     unreal == null ? "no open positions" : "on open positions, at last cycle"],
+     unreal == null ? "no open positions"
+       : (live ? "live from Alpaca" : "on open positions, at last cycle")],
     ["Open positions", String(s.open_positions ?? 0), "",
      "limit 5 concurrent"],
     ["Capital at risk", money(s.open_risk || 0), "",
@@ -846,7 +855,7 @@ async function refresh() {
       } catch (_) { /* stays null; the snapshot path is always valid */ }
     }
     const held = live ? live.positions : bp;
-    status(s, r); kpis(s, o, held, live); chart(e); funnel(r, d, o);
+    status(s, r, live); kpis(s, o, held, live); chart(e); funnel(r, d, o);
     // Spot prices come from the screening context of the most recent cycle
     // that captured one - the same source the volatility cards use.
     const ctxRun = (r || []).find(x => x.context_json && Object.keys(x.context_json).length);
