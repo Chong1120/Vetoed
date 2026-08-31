@@ -1,8 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/live.py": { "memory": 128, "maxDuration": 10 }
-  },
   "headers": [
     {
       "source": "/api/(.*)",

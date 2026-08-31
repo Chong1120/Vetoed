@@ -26,7 +26,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 PAPER_BASE = "https://paper-api.alpaca.markets/v2"
-TIMEOUT = 10
+TIMEOUT = 6      # two calls, comfortably inside Vercel's limit
 
 
 def _get(path: str, key: str, secret: str):
@@ -49,7 +49,7 @@ def _num(v):
         return None
 
 
-def build() -> tuple[int, dict]:
+def build():
     key = (os.environ.get("ALPACA_API_KEY") or "").strip()
     secret = (os.environ.get("ALPACA_SECRET_KEY") or "").strip()
     if not key or not secret:
@@ -90,7 +90,16 @@ def build() -> tuple[int, dict]:
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):                                    # noqa: N802
-        status, body = build()
+        # Never let this return a bare 500. A crashed function shows the host's
+        # generic error page, which says nothing about what went wrong and
+        # cannot be diagnosed from the browser. Report the failure as JSON so
+        # the cause is visible at the URL itself.
+        try:
+            status, body = build()
+        except Exception as exc:                         # noqa: BLE001
+            status = 500
+            body = {"available": False,
+                    "reason": "%s: %s" % (type(exc).__name__, exc)}
         payload = json.dumps(body).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
