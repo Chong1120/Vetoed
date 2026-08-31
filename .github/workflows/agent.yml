@@ -52,12 +52,14 @@ on:
         # single job. This is the answer to the schedule never firing.
         options: [dry-run, live, session]
       interval_minutes:
-        # Session mode only. 5 exists to prove the loop actually cycles without
-        # waiting half an hour to find out; 30 is the operating cadence.
+        # Session mode only. 30 is the operating cadence. 5 stays available
+        # because it proved the loop cycles - two cycles from one trigger,
+        # 15:02 and 15:07 UTC on 31 Aug - and is the fastest way to re-prove
+        # it after a change without waiting half an hour to learn otherwise.
         description: "interval_minutes - minutes between cycles in session mode"
         type: choice
-        default: "5"
-        options: ["5", "10", "30"]
+        default: "30"
+        options: ["30", "10", "5"]
       force:
         description: "force - run a full cycle even if the market is closed (dry-run only)"
         type: boolean
