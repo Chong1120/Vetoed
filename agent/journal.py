@@ -297,6 +297,8 @@ def all_orders(limit: int = 200, path: str = DB_PATH) -> list[dict]:
 #   dry_run    simulated; never left this machine
 #   failed     the broker saw it and rejected it
 #   not_filled reconcile.py checked with the broker and found nothing
+#   analysis_only an analysis pass reached a judgement and withheld the entry;
+#              no order was ever built, so there is nothing to hold risk
 #
 # NOTE what is deliberately ABSENT: 'uncertain'. When a submission times out
 # we do not know whether Alpaca received it, and the asymmetry is not close -
@@ -304,7 +306,7 @@ def all_orders(limit: int = 200, path: str = DB_PATH) -> list[dict]:
 # missing one that does exist can double a position. Uncertain orders are
 # therefore treated as live risk until reconcile.py resolves them against the
 # broker, at which point they become 'not_filled' or a confirmed position.
-DEAD_STATUSES = ("canceled", "cancelled", "rejected", "expired",
+DEAD_STATUSES = ("analysis_only", "canceled", "cancelled", "rejected", "expired",
                  "dry_run", "failed", "not_filled")
 
 

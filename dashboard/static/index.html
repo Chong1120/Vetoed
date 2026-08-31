@@ -286,7 +286,7 @@ function status(summary, runs) {
 }
 
 /* ------------------------------------------------------------------ */
-function kpis(s, orders) {
+function kpis(s, orders, broker) {
   const start = s.equity_start, latest = s.equity_latest;
   const chg = s.equity_change;
   const chgPct = (start && chg != null && start !== 0) ? (chg / start) * 100 : null;
@@ -297,6 +297,12 @@ function kpis(s, orders) {
 
   const riskPct = (latest && s.open_risk) ? (s.open_risk / latest) * 100 : 0;
 
+  // Equity moves with the whole account; this is the open risk marking to
+  // market right now, which is the figure a reader is actually looking for.
+  const unreal = (broker && broker.length)
+    ? broker.reduce((a, b) => a + (Number(b.unrealised) || 0), 0)
+    : null;
+
   const items = [
     ["Equity", latest == null ? NB : money(latest), "",
      start == null ? "" : "started " + money(start)],
@@ -306,6 +312,8 @@ function kpis(s, orders) {
      closed.length + " closed trade" + (closed.length === 1 ? "" : "s")],
     ["Win rate", wr == null ? NB : wr.toFixed(0) + "%", wr == null ? "" : (wr >= 80 ? "pos" : "neg"),
      closed.length ? `${wins} of ${closed.length}` : "needs closed trades"],
+    ["Unrealised P&amp;L", unreal == null ? NB : signed(unreal), cls(unreal),
+     unreal == null ? "no open positions" : "on open positions, at last cycle"],
     ["Open positions", String(s.open_positions ?? 0), "",
      "limit 5 concurrent"],
     ["Capital at risk", money(s.open_risk || 0), "",
@@ -524,6 +532,12 @@ function orderBadge(o) {
   const s = String(o.status || "").toLowerCase();
   let pill;
   if (s === "dry_run")      pill = `<span class="pill warn">dry run &middot; not sent</span>`;
+  // An analysis pass reached a real judgement and withheld only the entry.
+  // Reading it as a failure would be wrong; reading it as a trade, worse.
+  else if (s === "analysis_only")
+    pill = `<span class="pill">analysis &middot; entry withheld</span>`;
+  else if (s === "not_filled")
+    pill = `<span class="pill warn">never reached broker</span>`;
   else if (s === "failed")  pill = `<span class="pill alert">submit failed</span>`;
   else if ((o.filled_qty || 0) > 0) pill = `<span class="pill on">filled &times;${o.filled_qty}</span>`;
   else                      pill = `<span class="pill">${esc(o.status)}</span>`;
@@ -597,7 +611,7 @@ async function refresh() {
       get("summary"), get("equity"), get("positions"),
       get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200"),
       get("broker_positions")]);
-    status(s, r); kpis(s, o); chart(e); funnel(r, d, o);
+    status(s, r); kpis(s, o, bp); chart(e); funnel(r, d, o);
     vols(r); positions(p, bp); decisions(d, r, o);
   } catch (err) { console.error(err); }
 }

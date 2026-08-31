@@ -62,3 +62,30 @@ def test_mixed_only_returns_live(db):
     rows = journal.open_spreads(path=db)
     assert len(rows) == 1
     assert rows[0]["alpaca_order_id"] == "real-3"
+
+
+# --------------------------------------------------------------------------
+# An analysis pass must not invent risk.
+#
+# The 5-minute passes reach a real judgement and withhold only the entry, so
+# they journal an order row with status analysis_only. If that counted as an
+# open spread, every pass would add phantom risk: the concentration limit
+# would fill up with positions that do not exist, and real trades would be
+# vetoed by them. It is the mirror of why 'uncertain' deliberately DOES count.
+
+def test_an_analysis_pass_is_not_live_risk(db):
+    _order(db, "analysis_only", None)
+    assert journal.open_spreads(path=db) == [], (
+        "an analysis pass withheld the entry - counting it as an open spread "
+        "would fill the concentration limit with positions that do not exist")
+
+
+def test_analysis_only_is_listed_as_dead():
+    assert "analysis_only" in journal.DEAD_STATUSES
+
+
+def test_uncertain_is_still_live_risk(db):
+    # The asymmetry that makes analysis_only safe to exclude is exactly what
+    # makes 'uncertain' unsafe to exclude. Pin both together.
+    _order(db, "uncertain", None)
+    assert len(journal.open_spreads(path=db)) == 1

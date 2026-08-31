@@ -271,7 +271,18 @@ def _expiry_of(occ_symbol: str | None) -> date | None:
 # --------------------------------------------------------------------------- #
 
 async def run_cycle(dry_run: bool = True, force: bool = False,
-                    use_llm: bool = True) -> int:
+                    use_llm: bool = True, no_open: bool = False) -> int:
+    """One full cycle.
+
+    `no_open` runs everything except the entry: reconcile, manage exits,
+    screen, judge, gate, journal - then stops short of submitting an opening
+    order. It exists so exits can be checked far more often than entries are
+    taken. A late entry costs nothing; a late exit is the real exposure, and
+    pacing the two together forces one to inherit the other's cadence.
+
+    Exits are NOT suppressed. A stop-loss or take-profit found in an analysis
+    pass is acted on immediately - that is the entire point.
+    """
     journal.init()
     started = time.time()
     market = Market()
@@ -436,6 +447,22 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
                              timespec="seconds"))
             return 0
 
+        if no_open:
+            # Everything above still happened: positions reconciled, exits
+            # managed and acted on, the shortlist scored, the judgement made
+            # and journalled. Only the new position is withheld, so the record
+            # shows what the agent would have done at this moment.
+            log("ANALYSIS PASS - entry withheld until the next execution cycle")
+            journal.record_order(decision_id, candidate, rd.contracts, limit,
+                                 rd.max_loss_total,
+                                 {"id": None, "status": "analysis_only",
+                                  "client_order_id": coid})
+            write_health(cycle_state="idle",
+                         last_cycle_outcome="analysis pass - entry withheld",
+                         last_success=datetime.now(timezone.utc).isoformat(
+                             timespec="seconds"))
+            return 0
+
         res = await mcp.submit_credit_spread(candidate, rd.contracts, limit,
                                              client_order_id=coid)
         if res.ok:
@@ -469,11 +496,12 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
 
 # --------------------------------------------------------------------------- #
 
-async def guarded_cycle(dry_run: bool, force: bool, use_llm: bool) -> int:
+async def guarded_cycle(dry_run: bool, force: bool, use_llm: bool,
+                        no_open: bool = False) -> int:
     """One cycle under the single-flight lock. Never raises."""
     try:
         with runlock.single_flight(on_stale=warn):
-            return await run_cycle(dry_run, force, use_llm)
+            return await run_cycle(dry_run, force, use_llm, no_open)
     except runlock.LockBusy as exc:
         warn("skipping tick: %s" % exc)
         return 0
@@ -516,6 +544,9 @@ def main() -> int:
                          "(refused together with --schedule)")
     ap.add_argument("--schedule", action="store_true",
                     help="run continuously on a schedule")
+    ap.add_argument("--no-open", action="store_true",
+                    help="analyse and manage exits, but do not open a new "
+                         "position (entries are paced separately from exits)")
     ap.add_argument("--no-llm", action="store_true",
                     help="skip Claude entirely; use deterministic selection")
     args = ap.parse_args()
@@ -529,7 +560,8 @@ def main() -> int:
 
     if not args.schedule:
         _install_signal_handlers()
-        return asyncio.run(guarded_cycle(dry_run, args.force, not args.no_llm))
+        return asyncio.run(guarded_cycle(dry_run, args.force,
+                                         not args.no_llm, args.no_open))
 
     # --force exists to test a single cycle against a closed market. Combined
     # with --schedule it would mean "trade on stale weekend quotes, forever",
@@ -550,7 +582,8 @@ def main() -> int:
     def job():
         if _shutdown:
             return
-        asyncio.run(guarded_cycle(dry_run, False, not args.no_llm))
+        asyncio.run(guarded_cycle(dry_run, False,
+                                  not args.no_llm, args.no_open))
 
     # The cron window is a coarse filter in US Eastern time - never the local
     # clock of whatever host this runs on. The AUTHORITATIVE market-open check

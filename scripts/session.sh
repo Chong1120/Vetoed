@@ -18,7 +18,16 @@
 #   scripts/session.sh --live
 set -uo pipefail
 
-INTERVAL="${VETOED_INTERVAL_SECONDS:-1800}"   # ~30 minutes between cycles
+# Two cadences, deliberately. Every pass reconciles, manages exits and scores
+# the board; only every Nth pass may OPEN a position.
+#
+# Pacing them together forces one to inherit the other's cost. A late entry
+# costs nothing - the same premium is there in ten minutes. A late exit is the
+# real exposure: a stop-loss at 2x credit that is not looked at for half an
+# hour can be well past its trigger before anything notices. So exits are
+# checked often and entries stay paced.
+INTERVAL="${VETOED_INTERVAL_SECONDS:-300}"        # analyse every 5 minutes
+ENTRY_EVERY="${VETOED_ENTRY_EVERY:-6}"            # ...open on every 6th (30 min)
 BUDGET="${VETOED_SESSION_SECONDS:-20400}"     # 5h40m, inside the 6h job cap
 FLAGS="$*"
 
@@ -35,7 +44,8 @@ fi
 
 echo "session start $(date -u +%H:%M:%S)Z"
 echo "  flags       ${FLAGS:-<dry run>}"
-echo "  interval    ${INTERVAL}s"
+echo "  analyse     every ${INTERVAL}s"
+echo "  open        every ${ENTRY_EVERY} passes ($(( INTERVAL * ENTRY_EVERY / 60 )) min)"
 echo "  ends by     $(date -u -d "@${deadline}" +%H:%M:%S 2>/dev/null || echo "${deadline}")Z"
 
 n=0
@@ -44,9 +54,19 @@ while :; do
   echo ""
   echo "--- cycle ${n} at $(date -u +%H:%M:%S)Z ---"
 
+  # Pass 1 may open, then every ENTRY_EVERY-th pass after it. The passes in
+  # between still manage exits - --no-open withholds the entry only.
+  if [ $(( (n - 1) % ENTRY_EVERY )) -eq 0 ]; then
+    PASS="$FLAGS"
+    echo "execution pass - entries allowed"
+  else
+    PASS="$FLAGS --no-open"
+    echo "analysis pass - exits managed, entry withheld"
+  fi
+
   # Never abort the session on one bad cycle. The journal records the failure
   # and the next pass reconciles against the broker from scratch.
-  python -m agent.loop $FLAGS || echo "::warning::cycle ${n} exited non-zero"
+  python -m agent.loop $PASS || echo "::warning::cycle ${n} exited non-zero"
 
   bash scripts/commit_journal.sh || true
 

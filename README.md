@@ -152,7 +152,7 @@ FEATHERLESS_API_KEY=rc_...    # optional — see below
 # LIVE — submits real paper orders
 .venv\Scripts\python.exe -m agent.loop --live
 
-# unattended, on schedule (weekdays 10:00–15:30 ET, every 30 min)
+# unattended, one session job (weekdays; analyses every 5 min, opens every 30)
 .venv\Scripts\python.exe -m agent.loop --live --schedule
 
 # dashboard
@@ -227,7 +227,7 @@ will not combine `--force` with `--live`).
 cron: "7,37 13-21 * * 1-5"      # UTC, Mon–Fri
 ```
 
-Approximately every 30 minutes. The window is deliberately wide — 13:00–21:00
+It analyses approximately every 5 minutes and may open a position on at most one pass in six, so entries stay ~30 minutes apart. Exits are checked on every pass: a late entry costs nothing, a late exit is the real exposure. The window is deliberately wide — 13:00–21:00
 UTC covers the US session under both EDT and EST, so no daylight-saving change
 can silently stop it.
 
