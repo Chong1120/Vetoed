@@ -100,9 +100,27 @@ def decisions(limit: int = 100) -> list[dict]:
     dead = {o["decision_id"] for o in journal.all_orders(500)
             if (o.get("status") or "").lower() in _NOISE_ORDER_STATUS
             and o.get("decision_id") is not None}
-    return [_decode(d, "candidate_json", "risk_reasons", "risk_vetoes")
-            for d in journal.recent_decisions(limit)
-            if d["id"] not in dead]
+
+    # One cycle reached one judgement, so one run gets one row. The duplicate
+    # guard used to record a second decision instead of correcting the first,
+    # which put every affected cycle on the page twice - once approved, once
+    # "duplicate skipped". That is fixed at the source, but rows written while
+    # it was broken are still in the journal, and a display that quietly
+    # doubles a cycle is worth defending against whatever the cause. The
+    # LAST row for a run is the one that survives: it is how the cycle
+    # actually resolved.
+    seen_runs: set = set()
+    out: list[dict] = []
+    for d in journal.recent_decisions(limit):        # newest first
+        if d["id"] in dead:
+            continue
+        run = d.get("run_id")
+        if run is not None:
+            if run in seen_runs:
+                continue
+            seen_runs.add(run)
+        out.append(_decode(d, "candidate_json", "risk_reasons", "risk_vetoes"))
+    return out
 
 
 def orders(limit: int = 100) -> list[dict]:

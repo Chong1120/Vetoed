@@ -569,10 +569,23 @@ function decisions(rows, runs, orders) {
       const c = d.candidate_json || {};
       const vetoes = d.risk_vetoes || [];
       const reasons = d.risk_reasons || [];
+      // The gate's answer and what became of it are different facts. A
+      // decision can pass every risk check and still never reach the broker -
+      // the idempotency guard refusing a spread already held, for instance.
+      // Showing only "approved x12" there reads as a trade that happened.
+      const outcome = String(d.outcome || "").toLowerCase();
       const gate = d.risk_approved
         ? `<span class="pill on">approved &times;${d.risk_contracts}</span>`
         : (vetoes.length ? `<span class="pill alert">vetoed</span>`
                          : `<span class="pill off">n/a</span>`);
+      const resolved =
+          outcome === "duplicate skipped"
+            ? `<div style="margin-top:6px"><span class="pill warn">already held &middot; not re-opened</span></div>`
+        : outcome === "no trade"
+            ? `<div style="margin-top:6px"><span class="pill off">passed</span></div>`
+        : outcome === "no candidates"
+            ? `<div style="margin-top:6px"><span class="pill off">nothing cleared the gate</span></div>`
+        : "";
       const run = runById.get(d.run_id);
       const closed = run && !run.market_open
         ? `<div class="sub" style="color:var(--warn)">market closed</div>` : "";
@@ -587,7 +600,7 @@ function decisions(rows, runs, orders) {
         <td>${edgeCell(c)}</td>
         <td class="mono">${esc(d.llm_action || NB)}</td>
         <td class="mono">${d.llm_confidence == null ? NB : Number(d.llm_confidence).toFixed(2)}</td>
-        <td>${gate}${orderBadge(orderFor.get(d.id))}</td>
+        <td>${gate}${resolved}${orderBadge(orderFor.get(d.id))}</td>
         <td class="rationale">${esc(d.llm_rationale)}
           ${vetoes.map(v => `<div class="veto">${esc(v)}</div>`).join("")}
           ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="note">${esc(r)}</div>`).join("") : ""}
