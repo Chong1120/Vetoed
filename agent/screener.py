@@ -263,7 +263,21 @@ def _spread_ok(row: OptionRow) -> bool:
 
 
 def _oi_floor(underlying: str) -> int:
-    return MIN_OI.get(underlying, MIN_OI_DEFAULT)
+    """Never nominate a spread the risk gate is certain to reject.
+
+    These per-underlying floors exist to be STRICTER than the gate where a
+    name is deep enough to demand it. AAPL's 100 was looser, so every AAPL
+    strike with open interest between 100 and 249 was shortlisted, ranked,
+    frequently chosen - and then vetoed on liquidity every single time. Two
+    live cycles were lost to exactly that before it was caught.
+
+    Taking the max of the two keeps the stricter ETF floors and makes the
+    divergence unrepresentable: the screener can be tighter than the gate,
+    never looser. Importing the gate's own constant means raising it later
+    tightens the screener with it, instead of silently reopening this hole.
+    """
+    from agent.risk import MIN_OPEN_INTEREST
+    return max(MIN_OI.get(underlying, MIN_OI_DEFAULT), MIN_OPEN_INTEREST)
 
 
 def _short_leg_ok(row: OptionRow) -> bool:
