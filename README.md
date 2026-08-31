@@ -282,7 +282,7 @@ Honest accounting, because this is the real trade-off:
 .venv\Scripts\python.exe -m pytest tests\ -q
 ```
 
-**205 tests** covering the risk gates (naked-short rejection, loss-cap
+**207 tests** covering the risk gates (naked-short rejection, loss-cap
 verification, daily loss stop, concentration, sizing), the brain's defensive
 JSON parsing (hallucinated legs, flipped sides, garbage types), the probability
 maths, and the guardrail restrict-only invariant.

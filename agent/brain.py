@@ -67,11 +67,24 @@ FEATHERLESS_URL = "https://api.featherless.ai/v1/chat/completions"
 # honestly rather than impersonating a browser.
 USER_AGENT = "vetoed/0.1 (+https://github.com/Chong1120/Vetoed)"
 
+def _env_or(name: str, default: str) -> str:
+    """os.getenv with a default, treating an EMPTY value as absent too.
+
+    os.getenv returns its default only when the variable is missing, not when
+    it is set to "". GitHub Actions expands an undefined `vars.X` to the empty
+    string, so `FEATHERLESS_MODEL: ${{ vars.FEATHERLESS_MODEL }}` set the
+    variable to "" and the model name went out blank - Featherless answered
+    422 "The model must be provided in the request", the agent fell back to
+    deterministic selection, and the run still looked green.
+    """
+    return (os.getenv(name, "") or "").strip() or default
+
+
 # Overridable because model availability depends on the plan. If this one is
 # not on yours, set FEATHERLESS_MODEL - scripts/check_llm.py will tell you.
-FEATHERLESS_MODEL = os.getenv("FEATHERLESS_MODEL",
-                              "Qwen/Qwen2.5-72B-Instruct")
-ANTHROPIC_MODEL = os.getenv("BRAIN_MODEL", "claude-sonnet-4-6")
+DEFAULT_FEATHERLESS_MODEL = "Qwen/Qwen2.5-72B-Instruct"
+FEATHERLESS_MODEL = _env_or("FEATHERLESS_MODEL", DEFAULT_FEATHERLESS_MODEL)
+ANTHROPIC_MODEL = _env_or("BRAIN_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = 16000
 LLM_TIMEOUT_SECONDS = 90
 
@@ -478,7 +491,10 @@ def call_featherless(prompt: str, api_key: str, model: str | None = None,
     output, which is the failure mode we would be guarding against anyway.
     """
     body = json.dumps({
-        "model": model or FEATHERLESS_MODEL,
+        # Re-resolved per call, not read once at import: check_llm.py --model
+        # and the tests both set this after the module is loaded.
+        "model": model or _env_or("FEATHERLESS_MODEL", FEATHERLESS_MODEL
+                                  or DEFAULT_FEATHERLESS_MODEL),
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},

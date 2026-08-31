@@ -432,3 +432,32 @@ def test_featherless_prompt_spells_out_the_required_json_shape(monkeypatch):
                 "rationale", "confidence"):
         assert '"%s"' % key in msg, "prompt never names %r" % key
     assert "copied exactly" in msg or "character for character" in msg
+
+
+def test_an_empty_model_env_var_falls_back_to_the_default(monkeypatch):
+    """GitHub expands an undefined `vars.X` to "", and os.getenv only applies
+    its default when a variable is ABSENT. That sent a blank model name to
+    Featherless, which answered 422 and the agent silently fell back - while
+    the workflow still reported success."""
+    monkeypatch.setenv("FEATHERLESS_MODEL", "")
+    assert brain._env_or("FEATHERLESS_MODEL", "fallback") == "fallback"
+    monkeypatch.setenv("FEATHERLESS_MODEL", "   ")
+    assert brain._env_or("FEATHERLESS_MODEL", "fallback") == "fallback"
+    monkeypatch.setenv("FEATHERLESS_MODEL", "Qwen/Qwen2.5-7B-Instruct")
+    assert brain._env_or("FEATHERLESS_MODEL", "fallback") == "Qwen/Qwen2.5-7B-Instruct"
+
+
+def test_the_request_never_carries_a_blank_model(monkeypatch):
+    """The 422 this guards against was invisible in CI: green run, silent
+    fallback, and the failure only readable in the journal."""
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["model"] = json.loads(req.data.decode())["model"]
+        return _featherless_reply(GOOD_REPLY)
+
+    monkeypatch.setenv("FEATHERLESS_MODEL", "")
+    monkeypatch.setattr(brain.urllib.request, "urlopen", fake_urlopen)
+    brain.call_featherless("p", "rc-test")
+    assert seen["model"].strip()
+    assert seen["model"] == brain.DEFAULT_FEATHERLESS_MODEL
