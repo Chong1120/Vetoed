@@ -411,8 +411,16 @@ function kpis(s, orders, broker, live) {
   const items = [
     ["Equity", (live && live.equity != null) ? money(live.equity)
                 : (latest == null ? NB : money(latest)), "",
-     (live && live.equity != null) ? "live from Alpaca"
+     (live && live.equity != null) ? "cash + what the positions are worth now"
         : (start == null ? "" : "started " + money(start))],
+    // Cash rises the moment a credit spread is sold, which looks like profit
+    // and is not - it is money received against an obligation still open.
+    // Equity already nets that off; showing both makes the gap legible
+    // instead of alarming.
+    ["Cash", live && live.cash != null ? money(live.cash) : NB, "",
+     (live && live.cash != null && start)
+       ? signed(live.cash - start) + " premium received, not yet earned"
+       : "premium is received up front"],
     ["Total P&amp;L", chg == null ? NB : signed(chg), cls(chg),
      chgPct == null ? "" : pct(chgPct) + " on starting equity"],
     ["Realised P&amp;L", signed(s.realised_pnl || 0), cls(s.realised_pnl),
@@ -581,6 +589,17 @@ function dteOf(sym) {
   return Math.round((e - new Date()) / 86400000);
 }
 
+// The date the CONTRACT expires. Alpaca's order list shows an "expires at"
+// that is the order's time-in-force - when a DAY order would have been
+// cancelled if it had not filled - which is a different thing entirely and
+// reads alarmingly like the position is about to end. Show the real one.
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function expiryLabel(sym) {
+  const e = expiryOf(sym);
+  if (!e) return null;
+  return e.getUTCDate() + " " + MONTHS[e.getUTCMonth()];
+}
+
 function strikeOf(sym) {
   const m = String(sym || "").match(/[CP](\d{8})$/);
   return m ? +m[1] / 1000 : null;
@@ -655,7 +674,8 @@ function positions(rows, broker, live, spots) {
         ${roomPct == null ? NB : (roomPct > 0 ? "+" : "") + roomPct.toFixed(1) + "%"}
         <div class="sub dim">${room == null ? "" : "$" + Math.abs(room).toFixed(2) + " away"}</div>
       </td>
-      <td class="mono">${dte == null ? NB : dte + "d"}</td>
+      <td class="mono">${dte == null ? NB : dte + "d"}
+        <div class="sub dim">${expiryLabel(r.short_symbol) || ""}</div></td>
       <td class="mono">${qty}</td>
       <td class="mono pos">${money(collected)}
         <div class="sub dim">take profit ${money(tp)}</div></td>
@@ -678,7 +698,7 @@ function positions(rows, broker, live, spots) {
   $("positions").innerHTML = `
     <table><thead><tr>
       <th>Underlying</th><th>Strikes</th><th>Spot</th><th>Room</th>
-      <th>DTE</th><th>Qty</th><th>Collected</th><th>Max loss</th>
+      <th>Expires</th><th>Qty</th><th>Collected</th><th>Max loss</th>
       <th>Unrealised</th><th>Status</th>
     </tr></thead><tbody>${body}</tbody></table>
 
