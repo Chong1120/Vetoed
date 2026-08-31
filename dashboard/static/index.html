@@ -861,9 +861,15 @@ async function triggerManualRefresh() {
 (async () => {
   MODE = await detectMode();
   await refresh();
-  // Auto-sync in background: 15s on live server, 20s on static GitHub Pages
-  const pollInterval = (MODE === "live") ? 15000 : 20000;
-  setInterval(refresh, pollInterval);
+  // Auto-sync in background: 15s on live server, 30s on static GitHub Pages.
+  //
+  // On the static build the poll used to re-read a data.json that was cached
+  // for the life of the page, so the badge said "auto-sync active" while
+  // nothing could possibly change. SNAP is dropped before each poll now, and
+  // when LIVE_API is configured the ACCOUNT is re-read on the same tick -
+  // which is the part that actually moves between publishes.
+  const pollInterval = (MODE === "live") ? 15000 : 30000;
+  setInterval(() => { SNAP = null; refresh(); }, pollInterval);
 })();
 </script>
 </body>
