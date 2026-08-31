@@ -88,6 +88,18 @@ CREATE TABLE IF NOT EXISTS equity_snapshots (
     open_positions INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS broker_positions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    symbol      TEXT NOT NULL,
+    qty         REAL,
+    avg_price   REAL,
+    market_value REAL,
+    unrealised  REAL,
+    current_price REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_broker_positions_ts ON broker_positions(ts);
 CREATE INDEX IF NOT EXISTS idx_decisions_run ON decisions(run_id);
 CREATE INDEX IF NOT EXISTS idx_orders_decision ON orders(decision_id);
 CREATE INDEX IF NOT EXISTS idx_equity_ts ON equity_snapshots(ts);
@@ -242,6 +254,38 @@ def recent_runs(limit: int = 50, path: str = DB_PATH) -> list[dict]:
 def recent_decisions(limit: int = 200, path: str = DB_PATH) -> list[dict]:
     return _rows("SELECT * FROM decisions ORDER BY id DESC LIMIT ?",
                  (limit,), path)
+
+
+def record_broker_positions(legs: dict, path: str = DB_PATH) -> None:
+    """Snapshot what the broker holds, so the dashboard can show the account.
+
+    The journal knows what we intended and what we sent. It did not know what
+    Alpaca actually holds, so the dashboard could only ever show our own view
+    of the world - which is exactly what drifted when a filled spread was
+    wrongly marked closed. Storing the broker's own numbers each cycle means
+    the published page reports the account, not our belief about it.
+
+    Replaces the previous snapshot: this is current state, not history.
+    """
+    ts = now()
+    with connect(path) as c:
+        c.execute("DELETE FROM broker_positions")
+        for sym, p in (legs or {}).items():
+            def num(key):
+                try:
+                    return float(p.get(key))
+                except (TypeError, ValueError):
+                    return None
+            c.execute(
+                "INSERT INTO broker_positions (ts, symbol, qty, avg_price, "
+                "market_value, unrealised, current_price) VALUES (?,?,?,?,?,?,?)",
+                (ts, str(sym), num("qty"), num("avg_entry_price"),
+                 num("market_value"), num("unrealized_pl"), num("current_price")))
+
+
+def broker_positions(path: str = DB_PATH) -> list[dict]:
+    """What Alpaca held as of the last cycle that could reach it."""
+    return _rows("SELECT * FROM broker_positions ORDER BY symbol", (), path)
 
 
 def all_orders(limit: int = 200, path: str = DB_PATH) -> list[dict]:

@@ -64,16 +64,45 @@ def equity() -> list[dict]:
     return journal.equity_curve()
 
 
+def broker_positions() -> list[dict]:
+    """What Alpaca actually holds, as of the last cycle that could reach it.
+
+    The dashboard used to show only our own order rows, so any drift between
+    the journal and the account was invisible on the page - which is precisely
+    what happened when a filled spread was wrongly marked closed. These are the
+    broker's numbers.
+    """
+    return journal.broker_positions()
+
+
 def positions() -> list[dict]:
     journal.init()
     return journal.open_spreads()
 
 
+# An order that never reached Alpaca is not a decision worth showing. These
+# rows exist because the same spread was re-attempted while the journal wrongly
+# showed nothing open, and each attempt was refused by the duplicate guard. They
+# are artefacts of a bug, not judgements the agent made, and listing five
+# identical rows buries the vetoes that are the point of this page.
+#
+# Vetoes are NOT filtered. A refused trade is a real decision and stays.
+_NOISE_ORDER_STATUS = ("not_filled",)
+
+
 def decisions(limit: int = 100) -> list[dict]:
-    """Every decision with its full reasoning, including the vetoed ones."""
+    """Every decision with its full reasoning, including the vetoed ones.
+
+    Decisions whose order never reached the broker are dropped - see
+    _NOISE_ORDER_STATUS. Vetoes stay: a refused trade is the point.
+    """
     journal.init()
+    dead = {o["decision_id"] for o in journal.all_orders(500)
+            if (o.get("status") or "").lower() in _NOISE_ORDER_STATUS
+            and o.get("decision_id") is not None}
     return [_decode(d, "candidate_json", "risk_reasons", "risk_vetoes")
-            for d in journal.recent_decisions(limit)]
+            for d in journal.recent_decisions(limit)
+            if d["id"] not in dead]
 
 
 def orders(limit: int = 100) -> list[dict]:

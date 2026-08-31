@@ -52,6 +52,12 @@ def positions() -> JSONResponse:
     return JSONResponse(payload.positions())
 
 
+@app.get("/api/broker_positions")
+def broker_positions() -> JSONResponse:
+    """What Alpaca holds, not what we believe it holds."""
+    return JSONResponse(payload.broker_positions())
+
+
 @app.get("/api/runs")
 def runs(limit: int = 50) -> JSONResponse:
     return JSONResponse(payload.runs(limit))

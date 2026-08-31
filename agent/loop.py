@@ -290,6 +290,12 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
         # --- 1. reconcile against the broker ------------------------------- #
         state = await reconcile.fetch_broker_state(mcp)
         rec = reconcile.reconcile(state)
+        # Keep the broker's own view of the account, so the published dashboard
+        # reports what Alpaca holds rather than what we believe it holds. Only
+        # when the broker was actually readable - an unreachable cycle must not
+        # be allowed to erase the last known truth.
+        if state.reachable:
+            journal.record_broker_positions(state.legs)
         for note in rec.corrections:
             warn("reconcile: %s" % note)
         log("reconcile: %d open spread(s) confirmed, %d orphan leg(s)"

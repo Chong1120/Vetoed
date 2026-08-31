@@ -443,25 +443,59 @@ function vols(runs) {
 }
 
 /* ------------------------------------------------------------------ */
-function positions(rows) {
+/* Two tables, deliberately. The first is our spread - what we intended and
+   what it risks. The second is Alpaca's own leg-level answer, carried in the
+   journal from the last cycle that could reach the broker.
+
+   They are shown separately because they once disagreed silently: a filled
+   spread was marked closed here while the account still held both legs, and
+   the page had no way to reveal it. If these two ever diverge again, it is
+   now visible on the page rather than buried in the database. */
+function positions(rows, broker) {
+  broker = broker || [];
+  let html = "";
+
   if (!rows.length) {
-    $("positions").innerHTML = `<div class="empty"><strong>No open positions</strong>
+    html += `<div class="empty"><strong>No open positions</strong>
       Filled spreads appear here with their capped downside.</div>`;
-    return;
+  } else {
+    html += `<table><thead><tr>
+      <th>Underlying</th><th>Structure</th><th>Short leg</th><th>Long leg</th>
+      <th>Qty</th><th>Credit</th><th>Max loss</th><th>Status</th></tr></thead><tbody>`
+      + rows.map(r => `<tr>
+        <td class="mono">${esc(r.underlying)}</td>
+        <td>${esc(r.kind)}</td>
+        <td class="mono dim">${esc(r.short_symbol)}</td>
+        <td class="mono dim">${esc(r.long_symbol)}</td>
+        <td class="mono">${r.contracts ?? NB}</td>
+        <td class="mono">${money(r.credit)}</td>
+        <td class="mono neg">${money(r.max_loss_total)}</td>
+        <td class="mono">${esc(r.status)}</td></tr>`).join("")
+      + `</tbody></table>`;
   }
-  $("positions").innerHTML = `<table><thead><tr>
-    <th>Underlying</th><th>Structure</th><th>Short leg</th><th>Long leg</th>
-    <th>Qty</th><th>Credit</th><th>Max loss</th><th>Status</th></tr></thead><tbody>`
-    + rows.map(r => `<tr>
-      <td class="mono">${esc(r.underlying)}</td>
-      <td>${esc(r.kind)}</td>
-      <td class="mono dim">${esc(r.short_symbol)}</td>
-      <td class="mono dim">${esc(r.long_symbol)}</td>
-      <td class="mono">${r.contracts ?? NB}</td>
-      <td class="mono">${money(r.credit)}</td>
-      <td class="mono neg">${money(r.max_loss_total)}</td>
-      <td class="mono">${esc(r.status)}</td></tr>`).join("")
-    + `</tbody></table>`;
+
+  if (broker.length) {
+    const pnl = broker.reduce((a, b) => a + (Number(b.unrealised) || 0), 0);
+    html += `<div class="sub" style="margin:18px 0 8px">
+        Held at Alpaca &middot; ${broker.length} leg(s) &middot;
+        unrealised <span class="${pnl < 0 ? "neg" : "pos"}">${money(pnl)}</span>
+      </div>
+      <table><thead><tr>
+        <th>Contract</th><th>Qty</th><th>Avg price</th>
+        <th>Last</th><th>Market value</th><th>Unrealised</th>
+      </tr></thead><tbody>`
+      + broker.map(b => `<tr>
+        <td class="mono dim">${esc(b.symbol)}</td>
+        <td class="mono">${b.qty ?? NB}</td>
+        <td class="mono">${money(b.avg_price)}</td>
+        <td class="mono">${money(b.current_price)}</td>
+        <td class="mono">${money(b.market_value)}</td>
+        <td class="mono ${Number(b.unrealised) < 0 ? "neg" : "pos"}">${money(b.unrealised)}</td>
+      </tr>`).join("")
+      + `</tbody></table>`;
+  }
+
+  $("positions").innerHTML = html;
 }
 
 /* ------------------------------------------------------------------ */
@@ -551,11 +585,12 @@ function llmErrLine(raw, action) {
 /* ------------------------------------------------------------------ */
 async function refresh() {
   try {
-    const [s, e, p, d, r, o] = await Promise.all([
+    const [s, e, p, d, r, o, bp] = await Promise.all([
       get("summary"), get("equity"), get("positions"),
-      get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200")]);
+      get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200"),
+      get("broker_positions")]);
     status(s, r); kpis(s, o); chart(e); funnel(r, d, o);
-    vols(r); positions(p); decisions(d, r, o);
+    vols(r); positions(p, bp); decisions(d, r, o);
   } catch (err) { console.error(err); }
 }
 
