@@ -12,6 +12,15 @@
 # losing a cycle's record must not also fail the cycle.
 set -uo pipefail
 
+# NEVER let git stop and ask for credentials. On a runner there is nobody to
+# answer, and a push with a bad or revoked token can sit waiting on an auth
+# prompt instead of failing - which is not a failed push, it is a hung job.
+# Two sessions stalled exactly this way, holding the runner and journalling
+# nothing, while the cycle itself was perfectly healthy.
+export GIT_TERMINAL_PROMPT=0
+export GIT_ASKPASS=/bin/true
+export GCM_INTERACTIVE=never
+
 # WHY A SEPARATE TOKEN MATTERS HERE
 # GITHUB_TOKEN deliberately raises no events, so a journal push made with it
 # rebuilds nothing. That was survivable when each cycle was its own job: the
@@ -42,12 +51,15 @@ fi
 git commit -q -m "Journal: cycle $(date -u +%Y-%m-%dT%H:%MZ)"
 
 for attempt in 1 2 3; do
-  if git push --quiet; then
+  # A hard ceiling as well as the prompt guard. A push that cannot finish in
+  # 45 seconds is not going to, and the next cycle reconciles from the broker
+  # regardless - losing one journal push costs far less than a stalled session.
+  if timeout 45 git push --quiet; then
     echo "journal pushed"
     exit 0
   fi
   echo "push rejected, rebasing (attempt ${attempt})"
-  git pull --rebase --quiet || true
+  timeout 45 git pull --rebase --quiet || true
 done
 
 echo "::warning::could not push the journal after 3 attempts"
