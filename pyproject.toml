@@ -22,13 +22,31 @@ requires-python = ">=3.11"
 # Lower bounds are the versions this was actually built and tested against
 # (see docs/how-it-works.md). Not pinned exactly, so a fresh install can pick
 # up patch fixes.
+# UPPER BOUNDS ARE NOT OPTIONAL HERE.
+#
+# Every CI run installs fresh. With open-ended ranges that means whatever was
+# published in the last hour, and a trading session that worked at 19:15
+# failed at 19:55 because fastmcp shipped a release that moved
+# fastmcp.tools.tool - which alpaca-mcp-server imports at startup. The server
+# could not boot, so the cycle could not reach the broker at all. Nothing in
+# this repository changed.
+#
+# fastmcp is not a direct import of ours; it arrives underneath
+# alpaca-mcp-server, which is exactly why it was free to move without notice.
+# It is named explicitly so it cannot.
+#
+# These are the versions the agent is known to trade on. Raise them
+# deliberately, after running the suite - never by being the first to install
+# on a given morning.
 dependencies = [
-    "alpaca-py>=0.44.0",        # market data + trading REST (screening path)
-    "python-dotenv>=1.2.3",     # .env loading, used by every entry point
-    "anthropic>=1.2.0",         # brain.py - falls back to deterministic if absent
-    "mcp>=1.29.1",              # stdio client for Alpaca's MCP server
-    "alpaca-mcp-server>=2.3.0", # the server itself; executor spawns it
-    "apscheduler>=3.11.3",      # loop.py --schedule
+    "alpaca-py>=0.44.0,<0.45",        # market data + trading REST (screening path)
+    "python-dotenv>=1.2.3,<2",        # .env loading, used by every entry point
+    "anthropic>=1.2.0,<2",            # brain.py - falls back to deterministic if absent
+    "mcp>=1.29.1,<2",                 # stdio client for Alpaca's MCP server
+    "alpaca-mcp-server>=2.3.0,<3",    # the server itself; executor spawns it
+    "fastmcp==3.4.7",                 # pinned: 'from fastmcp.tools.tool import
+                                      # ToolResult' inside alpaca-mcp-server
+    "apscheduler>=3.11.3,<4",         # loop.py --schedule
 ]
 
 [project.optional-dependencies]
