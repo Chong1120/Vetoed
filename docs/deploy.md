@@ -152,7 +152,7 @@ filesystem.
 
 Two layers, and only one is authoritative:
 
-- **Coarse:** `cron: "*/30 13-21 * * 1-5"`. GitHub cron is UTC with no
+- **Coarse:** `cron: "7,37 13-21 * * 1-5"`. GitHub cron is UTC with no
   timezone, so the window is deliberately **wide** — 13:00–21:00 UTC covers the
   US session under both EDT (13:30–20:00) and EST (14:30–21:00). No
   daylight-saving change can silently stop trading.

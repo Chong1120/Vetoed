@@ -224,7 +224,7 @@ will not combine `--force` with `--live`).
 ### 4. Schedule
 
 ```
-cron: "*/30 13-21 * * 1-5"      # UTC, Mon–Fri
+cron: "7,37 13-21 * * 1-5"      # UTC, Mon–Fri
 ```
 
 Approximately every 30 minutes. The window is deliberately wide — 13:00–21:00

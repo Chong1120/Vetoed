@@ -32,7 +32,10 @@ on:
     # checked at the top of every cycle and is authoritative: it knows holidays
     # and early closes, which no cron expression does. Ticks outside the session
     # exit in about a second having done nothing.
-    - cron: "*/30 13-21 * * 1-5"
+    # NOT */30. That fires at :00 and :30, the two most congested minutes in
+    # GitHub's cron queue, where runs are delayed worst and dropped most often.
+    # :07 and :37 is still approximately every 30 minutes, off the crowd.
+    - cron: "7,37 13-21 * * 1-5"
 
   # Manual trigger, for demos and for proving the thing works without waiting
   # for a tick. Defaults to a DRY RUN so an accidental click cannot trade.
