@@ -7,11 +7,24 @@
 #
 # scripts/export_static.py imports only agent/journal.py and the standard
 # library, so this needs no pip install step.
+#
+# WHY workflow_run IS HERE AND NOT OPTIONAL
+# `push` alone does not cover the case that matters. The agent commits the
+# journal using GITHUB_TOKEN, and GitHub deliberately does NOT raise workflow
+# events for pushes made with that token - it is the guard against a workflow
+# retriggering itself forever. So every agent run pushed a fresh journal that
+# never rebuilt this site, and the published page silently served whatever
+# state existed at the last HUMAN push. It read MARKET CLOSED through an open
+# session. workflow_run fires on the agent finishing, whoever pushed.
 name: Deploy dashboard to Pages
 
 on:
   push:
     branches: [main]
+  # The agent finished a cycle and committed a journal. Republish.
+  workflow_run:
+    workflows: ["Vetoed agent"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +41,13 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Pin the branch, not the event's SHA. Under workflow_run the default
+      # ref can resolve to a commit captured before the agent appended its
+      # journal, which would republish the site with the stale journal that
+      # this trigger exists to replace.
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
