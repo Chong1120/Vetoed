@@ -242,12 +242,14 @@ const shortTs = t => String(t || "").replace("T", " ").replace("+00:00", "").sli
    Two modes, one page.
 
      live    a server is answering /api/*  -> poll it every 15s
-     frozen  no server (GitHub Pages)      -> read the bundled data.json
+     frozen  no server (GitHub Pages)      -> auto-poll data.json every 20s
 
    The static build is the submitted demo URL, so it must render with no
-   runtime at all. Detect once on load rather than per request.
+   runtime at all. Auto-polling in static mode uses cache-busting so
+   browser tabs update automatically when GitHub Actions commits a new cycle.
    ------------------------------------------------------------------ */
 let MODE = null, SNAP = null;
+let lastSyncTime = null;
 
 async function detectMode() {
   try {
@@ -258,8 +260,12 @@ async function detectMode() {
 }
 
 async function get(key, query = "") {
-  if (MODE === "live") return (await fetch("/api/" + key + query)).json();
-  if (!SNAP) SNAP = await (await fetch("data.json", { cache: "no-store" })).json();
+  if (MODE === "live") return (await fetch("/api/" + key + query, { cache: "no-store" })).json();
+  if (!SNAP) {
+    const bust = "?_t=" + Date.now();
+    const res = await fetch("data.json" + bust, { cache: "no-store" });
+    SNAP = await res.json();
+  }
   return SNAP[key];
 }
 
@@ -268,9 +274,13 @@ function status(summary, runs) {
   const run = summary.last_run || runs[0] || null;
   const feed = run?.feed || "unknown";
   const bits = [];
+  
   if (MODE === "frozen" && SNAP && SNAP.generated_at) {
-    bits.push(`<span class="pill">snapshot &middot; ${esc(shortTs(SNAP.generated_at))} UTC</span>`);
+    bits.push(`<span class="pill"><span class="dot live"></span>auto-sync &middot; ${esc(shortTs(SNAP.generated_at))} UTC</span>`);
+  } else if (MODE === "live") {
+    bits.push(`<span class="pill on"><span class="dot live"></span>live broker</span>`);
   }
+  
   bits.push(`<span class="pill info">${esc(feed)} feed</span>`);
   if (run) {
     bits.push(`<span class="pill ${run.market_open ? "on" : "off"}">`
@@ -282,6 +292,11 @@ function status(summary, runs) {
   } else {
     bits.push(`<span class="pill">no runs yet</span>`);
   }
+  
+  // Instant refresh button
+  bits.push(`<button id="refresh-btn" onclick="triggerManualRefresh()" class="pill" style="cursor:pointer;background:var(--raised);color:var(--text);border-color:var(--line);display:inline-flex;align-items:center;gap:4px;">`
+    + `<span>&#x21bb;</span> Refresh</button>`);
+  
   $("status").innerHTML = bits.join("");
 }
 
@@ -625,6 +640,11 @@ function llmErrLine(raw, action) {
 /* ------------------------------------------------------------------ */
 async function refresh() {
   try {
+    // In static mode, clear cached SNAP so we always fetch the newest data.json
+    if (MODE === "frozen") {
+      SNAP = null;
+    }
+    
     const [s, e, p, d, r, o, bp] = await Promise.all([
       get("summary"), get("equity"), get("positions"),
       get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200"),
@@ -636,21 +656,35 @@ async function refresh() {
     let live = null;
     if (MODE === "live") {
       try {
-        const res = await fetch("/api/live");
+        const res = await fetch("/api/live", { cache: "no-store" });
         if (res.ok) { const j = await res.json(); if (j.available) live = j; }
       } catch (_) { /* stays null; the snapshot path is always valid */ }
     }
     const held = live ? live.positions : bp;
     status(s, r); kpis(s, o, held, live); chart(e); funnel(r, d, o);
     vols(r); positions(p, held, live); decisions(d, r, o);
-  } catch (err) { console.error(err); }
+  } catch (err) { console.error("Refresh error:", err); }
+}
+
+async function triggerManualRefresh() {
+  const btn = $("refresh-btn");
+  if (btn) {
+    btn.innerHTML = `<span style="display:inline-block;animation:breathe 0.6s infinite">&#x21bb;</span> Syncing...`;
+    btn.style.opacity = "0.7";
+  }
+  await refresh();
+  if (btn) {
+    btn.innerHTML = `<span>&#x21bb;</span> Refresh`;
+    btn.style.opacity = "1";
+  }
 }
 
 (async () => {
   MODE = await detectMode();
   await refresh();
-  // A frozen snapshot never changes, so do not poll it.
-  if (MODE === "live") setInterval(refresh, 15000);
+  // Auto-sync in background: 15s on live server, 20s on static GitHub Pages
+  const pollInterval = (MODE === "live") ? 15000 : 20000;
+  setInterval(refresh, pollInterval);
 })();
 </script>
 </body>
