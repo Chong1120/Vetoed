@@ -245,7 +245,12 @@ class AlpacaMCP:
             "type": "limit",
             "time_in_force": "day",
             "order_class": "mleg",
-            "limit_price": round(float(limit_price), 2),
+            # A STRING, like qty and ratio_qty above. The MCP server validates
+            # limit_price as a string and rejects a float outright - the order
+            # never reaches Alpaca, and the cycle records an uncertain result
+            # for an order that was in fact never placed. Two decimals always,
+            # so 0.80 does not go out as "0.8".
+            "limit_price": "%.2f" % float(limit_price),
             "legs": legs,
         }
         if client_order_id:
@@ -301,7 +306,7 @@ class AlpacaMCP:
         }
         if limit_price is not None:
             args["type"] = "limit"
-            args["limit_price"] = round(float(limit_price), 2)
+            args["limit_price"] = "%.2f" % float(limit_price)
         else:
             args["type"] = "market"
         if client_order_id:
