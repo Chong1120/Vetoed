@@ -249,7 +249,6 @@ const shortTs = t => String(t || "").replace("T", " ").replace("+00:00", "").sli
    browser tabs update automatically when GitHub Actions commits a new cycle.
    ------------------------------------------------------------------ */
 let MODE = null, SNAP = null;
-let lastSyncTime = null;
 
 async function detectMode() {
   try {
@@ -259,14 +258,20 @@ async function detectMode() {
   return "frozen";
 }
 
-async function get(key, query = "") {
-  if (MODE === "live") return (await fetch("/api/" + key + query, { cache: "no-store" })).json();
-  if (!SNAP) {
+async function fetchSnapshot() {
+  try {
     const bust = "?_t=" + Date.now();
     const res = await fetch("data.json" + bust, { cache: "no-store" });
-    SNAP = await res.json();
+    if (res.ok) {
+      SNAP = await res.json();
+    }
+  } catch (e) {
+    console.warn("Could not fetch data.json:", e);
   }
-  return SNAP[key];
+}
+
+async function get(key, query = "") {
+  return (await fetch("/api/" + key + query, { cache: "no-store" })).json();
 }
 
 /* ------------------------------------------------------------------ */
@@ -275,8 +280,11 @@ function status(summary, runs) {
   const feed = run?.feed || "unknown";
   const bits = [];
   
-  if (MODE === "frozen" && SNAP && SNAP.generated_at) {
-    bits.push(`<span class="pill"><span class="dot live"></span>auto-sync &middot; ${esc(shortTs(SNAP.generated_at))} UTC</span>`);
+  if (MODE === "frozen") {
+    bits.push(`<span class="pill on"><span class="dot live"></span>auto-sync active</span>`);
+    if (SNAP && SNAP.generated_at) {
+      bits.push(`<span class="pill">data &middot; ${esc(shortTs(SNAP.generated_at))} UTC</span>`);
+    }
   } else if (MODE === "live") {
     bits.push(`<span class="pill on"><span class="dot live"></span>live broker</span>`);
   }
@@ -647,15 +655,23 @@ function llmErrLine(raw, action) {
 /* ------------------------------------------------------------------ */
 async function refresh() {
   try {
-    // In static mode, clear cached SNAP so we always fetch the newest data.json
-    if (MODE === "frozen") {
-      SNAP = null;
+    let s, e, p, d, r, o, bp;
+    if (MODE === "live") {
+      [s, e, p, d, r, o, bp] = await Promise.all([
+        get("summary"), get("equity"), get("positions"),
+        get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200"),
+        get("broker_positions")]);
+    } else {
+      await fetchSnapshot();
+      if (!SNAP) return;
+      s = SNAP.summary;
+      e = SNAP.equity;
+      p = SNAP.positions;
+      d = SNAP.decisions;
+      r = SNAP.runs;
+      o = SNAP.orders;
+      bp = SNAP.broker_positions;
     }
-    
-    const [s, e, p, d, r, o, bp] = await Promise.all([
-      get("summary"), get("equity"), get("positions"),
-      get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200"),
-      get("broker_positions")]);
 
     // Live view exists only when a local server holds the credentials. The
     // published snapshot has no server and must never carry keys, so this is
