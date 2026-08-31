@@ -6,7 +6,7 @@ is deliberately odd in places — see §3.
 Slides: <https://claude.ai/code/artifact/33fbdd10-9ace-493f-a1c1-35f3ed49de54>
 Dashboard: <https://chong1120.github.io/Vetoed/>
 
-Runs about **4 minutes 10 seconds** at a normal narration pace. A 90-second cut
+Runs about **6 minutes 26 seconds** at a normal narration pace. A 90-second cut
 is in §2.
 
 ---
@@ -176,17 +176,17 @@ the tone doesn't drift.
 | From | Slide | Content |
 |---|---|---|
 | 0:00 | 1 | Hook |
-| 0:14 | 2 | The problem |
-| 0:36 | 3 | Credit spreads, both kinds |
-| 1:02 | 4 | Implied vs realised |
-| 1:30 | 5 | The measurement |
-| 1:56 | 6 | **The bug I caught** |
-| 2:26 | 7 | Separation of powers |
-| 2:50 | 8 | Risk |
-| 3:08 | 9 | It says no |
-| 3:30 | 10 | Learning on a leash |
-| 3:52 | — | **Cut to the live dashboard** |
-| 4:14 | 12 | Limits and close |
+| 0:15 | 2 | The problem |
+| 0:47 | 3 | Credit spreads, both kinds |
+| 1:20 | 4 | Implied vs realised |
+| 1:53 | 5 | The measurement |
+| 2:35 | 6 | **The bug I caught** |
+| 3:27 | 7 | Separation of powers |
+| 3:59 | 8 | Risk |
+| 4:23 | 9 | It says no |
+| 4:47 | 10 | Learning on a leash |
+| 5:20 | — | **Cut to the live dashboard** |
+| 5:56 | 12 | Limits and close |
 
 Derived from word counts at 158 wpm plus the break tags. Your generated audio
 will differ by a few seconds — line the slides up to what you actually get.
