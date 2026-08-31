@@ -211,6 +211,16 @@ def reconcile(state: BrokerState, rows: list[dict] | None = None,
 
         if has_short and has_long:
             r.open_spreads.append(row)                 # genuinely held
+            # The broker holds both legs, so the order filled - whatever it
+            # said at submission. Orders were journalled as pending_new and
+            # never corrected, so the dashboard showed "pending_new" beside
+            # positions that had been open for hours. The broker is the
+            # authority on this, and it has just answered.
+            if oid and status not in ("filled", "closed"):
+                journal.update_order_status(oid, "filled",
+                                            **({"path": path} if path else {}))
+                r.corrections.append("%s: confirmed filled at the broker"
+                                     % (short_sym or "?"))
             continue
 
         if working:

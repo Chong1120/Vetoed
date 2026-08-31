@@ -122,6 +122,11 @@ jobs:
           FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
           FEATHERLESS_MODEL: ${{ vars.FEATHERLESS_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Optional. Without it the session still trades and still
+          # journals; only the published dashboard lags until the job
+          # ends, because GITHUB_TOKEN pushes raise no events.
+          VETOED_PUSH_TOKEN: ${{ secrets.VETOED_PUSH_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           MINUTES="${{ inputs.interval_minutes }}"
           MINUTES="${MINUTES:-10}"

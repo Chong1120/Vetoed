@@ -37,6 +37,22 @@
   }
   .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .pos { color: var(--profit); } .neg { color: var(--loss); }
+  .warn { color: var(--warn); }
+  /* Filter + pager controls for the decision log. */
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tab { font: inherit; font-size: 11px; letter-spacing: .04em;
+         text-transform: uppercase; cursor: pointer; padding: 5px 11px;
+         border-radius: 999px; border: 1px solid var(--line);
+         background: transparent; color: var(--muted); }
+  .tab:hover { color: var(--text); border-color: var(--muted); }
+  .tab[aria-pressed="true"] { color: var(--ground); background: var(--text);
+         border-color: var(--text); }
+  .pager { display: flex; align-items: center; gap: 10px;
+           justify-content: flex-end; margin-top: 12px; }
+  .pager button { font: inherit; font-size: 12px; cursor: pointer;
+           padding: 5px 12px; border-radius: 6px; color: var(--text);
+           border: 1px solid var(--line); background: transparent; }
+  .pager button:disabled { opacity: .35; cursor: default; }
   .dim { color: var(--muted); }
 
   /* ---------------- header ---------------- */
@@ -476,70 +492,150 @@ function vols(runs) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Two tables, deliberately. The first is our spread - what we intended and
-   what it risks. The second is Alpaca's own leg-level answer, carried in the
-   journal from the last cycle that could reach the broker.
+/* OPEN POSITIONS
+   A credit spread is one position, not two contracts, and the questions a
+   holder actually has are: what did I sell, where is the stock relative to
+   it, how much room is left, and what is it worth now. The old table listed
+   raw legs and left every one of those to be worked out by hand.
 
-   They are shown separately because they once disagreed silently: a filled
-   spread was marked closed here while the account still held both legs, and
-   the page had no way to reveal it. If these two ever diverge again, it is
-   now visible on the page rather than buried in the database. */
-function positions(rows, broker, live) {
+   Legs are still shown, collapsed, because they are what the broker holds
+   and the account must be checkable against them. */
+
+function expiryOf(sym) {
+  // OCC: ROOT + YYMMDD + C/P + strike. Take the date.
+  const m = String(sym || "").match(/[A-Z]+(\d{2})(\d{2})(\d{2})[CP]/);
+  if (!m) return null;
+  return new Date(Date.UTC(2000 + +m[1], +m[2] - 1, +m[3]));
+}
+
+function dteOf(sym) {
+  const e = expiryOf(sym);
+  if (!e) return null;
+  return Math.round((e - new Date()) / 86400000);
+}
+
+function strikeOf(sym) {
+  const m = String(sym || "").match(/[CP](\d{8})$/);
+  return m ? +m[1] / 1000 : null;
+}
+
+function positions(rows, broker, live, spots) {
   broker = broker || [];
-  let html = "";
+  spots = spots || {};
+  const legBySym = new Map(broker.map(b => [b.symbol, b]));
 
   if (!rows.length) {
-    html += `<div class="empty"><strong>No open positions</strong>
+    $("positions").innerHTML = `<div class="empty"><strong>No open positions</strong>
       Filled spreads appear here with their capped downside.</div>`;
-  } else {
-    html += `<table><thead><tr>
-      <th>Underlying</th><th>Structure</th><th>Short leg</th><th>Long leg</th>
-      <th>Qty</th><th>Credit</th><th>Max loss</th><th>Status</th></tr></thead><tbody>`
-      + rows.map(r => `<tr>
-        <td class="mono">${esc(r.underlying)}</td>
-        <td>${esc(r.kind)}</td>
-        <td class="mono dim">${esc(r.short_symbol)}</td>
-        <td class="mono dim">${esc(r.long_symbol)}</td>
-        <td class="mono">${r.contracts ?? NB}</td>
-        <td class="mono">${money(r.credit)}</td>
-        <td class="mono neg">${money(r.max_loss_total)}</td>
-        <td class="mono">${esc(r.status)}</td></tr>`).join("")
-      + `</tbody></table>`;
+    return;
   }
 
-  if (broker.length) {
-    const pnl = broker.reduce((a, b) => a + (Number(b.unrealised) || 0), 0);
-    // Say WHEN. These are Alpaca's own numbers, read at the last cycle - not
-    // a live feed, because this page is a static snapshot so the URL never
-    // sleeps. Options reprice by the second, so a reader comparing this to an
-    // open Alpaca tab will see different figures and reasonably conclude the
-    // page is wrong. It is not wrong, it is timestamped, and it should say so.
-    const asOf = broker[0] && broker[0].ts ? shortTs(broker[0].ts) : null;
-    const tag = live
-      ? `<span class="pill on">live &middot; ${esc(shortTs(live.fetched_at))} UTC</span>`
-      : (asOf ? `<span class="dim">&middot; as read at ${esc(asOf)} UTC,
-          not live &mdash; Alpaca will differ as prices move</span>` : "");
-    html += `<div class="sub" style="margin:18px 0 8px">
-        Held at Alpaca &middot; ${broker.length} leg(s) &middot;
-        unrealised <span class="${pnl < 0 ? "neg" : "pos"}">${money(pnl)}</span>
-        ${tag}
-      </div>
-      <table><thead><tr>
+  const asOf = live ? shortTs(live.fetched_at)
+                    : (broker[0] && broker[0].ts ? shortTs(broker[0].ts) : null);
+  const tag = live
+    ? `<span class="pill on">live &middot; ${esc(asOf)} UTC</span>`
+    : (asOf ? `<span class="dim">as read at ${esc(asOf)} UTC &mdash; Alpaca
+        will differ as prices move</span>` : "");
+
+  let total = 0, matched = 0;
+  const body = rows.map(r => {
+    const shortLeg = legBySym.get(r.short_symbol);
+    const longLeg = legBySym.get(r.long_symbol);
+    const known = shortLeg && longLeg;
+    if (known) matched += 2;
+    const pnl = known ? (Number(shortLeg.unrealised) || 0) + (Number(longLeg.unrealised) || 0)
+                      : null;
+    if (pnl != null) total += pnl;
+
+    const k = strikeOf(r.short_symbol);
+    const kLong = strikeOf(r.long_symbol);
+    const spot = spots[r.underlying] != null ? Number(spots[r.underlying]) : null;
+    const isPut = /put/i.test(r.kind || "");
+
+    // Room = how far the stock must move before the short strike is breached.
+    // The single most useful number on the row, and it was not there at all.
+    let room = null, roomPct = null;
+    if (spot != null && k != null) {
+      room = isPut ? spot - k : k - spot;
+      roomPct = (room / spot) * 100;
+    }
+    const roomCls = roomPct == null ? "" : (roomPct <= 0 ? "neg" : roomPct < 2 ? "warn" : "pos");
+
+    const credit = Number(r.credit) || 0;
+    const qty = Number(r.contracts) || 0;
+    const collected = credit * 100 * qty;
+    const dte = dteOf(r.short_symbol);
+    const maxLoss = Number(r.max_loss_total) || 0;
+    // Exit rules, made concrete rather than left in the docs.
+    const tp = collected * 0.50, sl = -collected * 2.0;
+
+    const st = String(r.status || "").toLowerCase();
+    const stPill = st === "filled" ? `<span class="pill on">filled</span>`
+      : st === "uncertain" ? `<span class="pill warn">unconfirmed</span>`
+      : `<span class="pill">${esc(r.status)}</span>`;
+
+    return `<tr>
+      <td>
+        <div class="mono" style="font-weight:600">${esc(r.underlying)}</div>
+        <div class="sub dim">${esc((r.kind || "").replace("_", " "))}</div>
+      </td>
+      <td class="mono">
+        <div>sold ${k == null ? NB : "$" + k.toFixed(2)}</div>
+        <div class="sub dim">bought $${kLong == null ? NB : kLong.toFixed(2)}</div>
+      </td>
+      <td class="mono">${spot == null ? NB : "$" + spot.toFixed(2)}</td>
+      <td class="mono ${roomCls}">
+        ${roomPct == null ? NB : (roomPct > 0 ? "+" : "") + roomPct.toFixed(1) + "%"}
+        <div class="sub dim">${room == null ? "" : "$" + Math.abs(room).toFixed(2) + " away"}</div>
+      </td>
+      <td class="mono">${dte == null ? NB : dte + "d"}</td>
+      <td class="mono">${qty}</td>
+      <td class="mono pos">${money(collected)}
+        <div class="sub dim">take profit ${money(tp)}</div></td>
+      <td class="mono neg">${money(maxLoss)}
+        <div class="sub dim">stop ${money(sl)}</div></td>
+      <td class="mono ${pnl == null ? "dim" : cls(pnl)}">
+        ${pnl == null ? "not yet at broker" : signed(pnl)}</td>
+      <td>${stPill}</td>
+    </tr>`;
+  }).join("");
+
+  const unmatched = broker.length - matched;
+  const note = unmatched > 0
+    ? `<div class="sub" style="color:var(--warn);margin-top:8px">
+         ${unmatched} broker leg(s) not matched to a spread above &mdash; a fill
+         that landed after this reading, or a position opened outside the agent.
+       </div>`
+    : "";
+
+  $("positions").innerHTML = `
+    <table><thead><tr>
+      <th>Underlying</th><th>Strikes</th><th>Spot</th><th>Room</th>
+      <th>DTE</th><th>Qty</th><th>Collected</th><th>Max loss</th>
+      <th>Unrealised</th><th>Status</th>
+    </tr></thead><tbody>${body}</tbody></table>
+
+    <div class="sub" style="margin:16px 0 8px">
+      Held at Alpaca &middot; ${broker.length} leg(s) &middot;
+      total unrealised <span class="${cls(total)}">${signed(total)}</span>
+      &middot; ${tag}
+    </div>
+    ${note}
+    <details style="margin-top:6px">
+      <summary class="sub dim" style="cursor:pointer">
+        Show the individual contracts Alpaca holds
+      </summary>
+      <table style="margin-top:8px"><thead><tr>
         <th>Contract</th><th>Qty</th><th>Avg price</th>
         <th>Last</th><th>Market value</th><th>Unrealised</th>
-      </tr></thead><tbody>`
-      + broker.map(b => `<tr>
+      </tr></thead><tbody>` + broker.map(b => `<tr>
         <td class="mono dim">${esc(b.symbol)}</td>
         <td class="mono">${b.qty ?? NB}</td>
         <td class="mono">${money(b.avg_price)}</td>
         <td class="mono">${money(b.current_price)}</td>
         <td class="mono">${money(b.market_value)}</td>
-        <td class="mono ${Number(b.unrealised) < 0 ? "neg" : "pos"}">${money(b.unrealised)}</td>
-      </tr>`).join("")
-      + `</tbody></table>`;
-  }
-
-  $("positions").innerHTML = html;
+        <td class="mono ${cls(Number(b.unrealised))}">${money(b.unrealised)}</td>
+      </tr>`).join("") + `</tbody></table></details>`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -576,81 +672,134 @@ function orderBadge(o) {
   return `<div style="margin-top:6px">${pill}</div>`;
 }
 
+/* DECISION LOG
+   Every judgement, including the refusals - that is the point of the page.
+   But "everything, forever, in one list" is not readable, and it buried the
+   distinction that matters most: a dry run and a real paper trade look
+   identical here unless you say otherwise. One is a rehearsal, the other
+   moved money in the account.
+
+   So: filter by what became of the decision, and page through the rest. */
+
+const DEC = { filter: "all", page: 0, size: 12, rows: [], runs: null, orders: null };
+
+const DEC_FILTERS = [
+  ["all",      "All"],
+  ["traded",   "Traded"],
+  ["vetoed",   "Vetoed by risk"],
+  ["passed",   "Passed"],
+  ["dry",      "Dry run"],
+];
+
+function decClass(d, orderFor) {
+  // What actually became of this decision, in one word.
+  const o = orderFor.get(d.id);
+  const st = String((o && o.status) || "").toLowerCase();
+  const outcome = String(d.outcome || "").toLowerCase();
+  if (st === "dry_run") return "dry";
+  if (outcome === "vetoed" || (d.risk_vetoes || []).length) return "vetoed";
+  if (st && st !== "not_filled" && st !== "analysis_only") return "traded";
+  return "passed";
+}
+
 function decisions(rows, runs, orders) {
-  // A decision that was approved but only ever dry-run must not read as a
-  // live trade - especially on a weekend, when --force was used to test.
-  const runById = new Map((runs || []).map(r => [r.id, r]));
+  if (rows) { DEC.rows = rows; DEC.runs = runs; DEC.orders = orders; DEC.page = 0; }
+  const runById = new Map((DEC.runs || []).map(r => [r.id, r]));
   const orderFor = new Map();
-  for (const o of (orders || [])) {
+  for (const o of (DEC.orders || [])) {
     if (o.decision_id != null && !orderFor.has(o.decision_id)) orderFor.set(o.decision_id, o);
   }
-  if (!rows.length) {
+
+  if (!DEC.rows.length) {
     $("decisions").innerHTML = `<div class="empty"><strong>No decisions recorded yet</strong>
       Run <span class="num">python -m agent.loop</span> to start a cycle.</div>`;
     return;
   }
-  $("decisions").innerHTML = `<table><thead><tr>
-    <th>Time (UTC)</th><th>Candidate</th><th>Edge</th><th>Action</th>
-    <th>Conf.</th><th>Risk</th><th>Reasoning</th></tr></thead><tbody>`
-    + rows.map(d => {
-      const c = d.candidate_json || {};
-      const vetoes = d.risk_vetoes || [];
-      const reasons = d.risk_reasons || [];
-      
-      const outcome = String(d.outcome || "").toLowerCase();
-      let gate = "";
-      if (outcome === "duplicate skipped") {
-        gate = `<span class="pill warn">SKIPPED &middot; ALREADY HELD</span><div class="sub dim" style="margin-top:2px">risk approved &times;${d.risk_contracts}</div>`;
-      } else if (d.risk_approved) {
-        gate = `<span class="pill on">approved &times;${d.risk_contracts}</span>`;
-      } else if (vetoes.length) {
-        gate = `<span class="pill alert">vetoed</span>`;
-      } else if (outcome === "no trade" || outcome === "no candidates") {
-        gate = `<span class="pill off">passed</span>`;
-      } else {
-        gate = `<span class="pill off">n/a</span>`;
-      }
 
-      const run = runById.get(d.run_id);
-      const closed = run && !run.market_open
-        ? `<div class="sub" style="color:var(--warn)">market closed</div>` : "";
-      
-      const popStr = c.pop != null
-        ? (Number(c.pop) <= 1 ? (Number(c.pop) * 100).toFixed(1) + "%" : esc(c.pop))
-        : NB;
+  const counts = { all: DEC.rows.length, traded: 0, vetoed: 0, passed: 0, dry: 0 };
+  for (const d of DEC.rows) counts[decClass(d, orderFor)]++;
 
-      const spread = c.short_symbol
-        ? `<div class="mono">${esc(c.underlying)} ${esc(c.kind)}</div>
-           <div class="sub">${c.short_strike}/${c.long_strike} &middot; ${c.dte}DTE
-           &middot; POP ${popStr} &middot; ${money(c.credit)} credit</div>`
-        : `<span class="dim">${NB}</span>`;
-      return `<tr>
-        <td class="mono dim">${esc(shortTs(d.ts))}${closed}</td>
-        <td>${spread}</td>
-        <td>${edgeCell(c)}</td>
-        <td class="mono">${esc(d.llm_action || NB)}</td>
-        <td class="mono">${d.llm_confidence == null ? NB : Number(d.llm_confidence).toFixed(2)}</td>
-        <td>${gate}${orderBadge(orderFor.get(d.id))}</td>
-        <td class="rationale">${esc(d.llm_rationale)}
-          ${vetoes.map(v => `<div class="veto">${esc(v)}</div>`).join("")}
-          ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="note">${esc(r)}</div>`).join("") : ""}
-          ${d.llm_error ? `<div class="note">${esc(llmErrLine(d.llm_error, d.llm_action))}</div>` : ""}
-        </td></tr>`;
-    }).join("") + `</tbody></table>`;
+  const shown = DEC.filter === "all"
+    ? DEC.rows
+    : DEC.rows.filter(d => decClass(d, orderFor) === DEC.filter);
+
+  const pages = Math.max(1, Math.ceil(shown.length / DEC.size));
+  if (DEC.page >= pages) DEC.page = pages - 1;
+  const page = shown.slice(DEC.page * DEC.size, DEC.page * DEC.size + DEC.size);
+
+  const tabs = DEC_FILTERS.map(([k, label]) =>
+    `<button class="tab" data-dec-filter="${k}" aria-pressed="${DEC.filter === k}">
+       ${label} <span class="dim">${counts[k] ?? 0}</span></button>`).join("");
+
+  const body = page.map(d => {
+    const c = d.candidate_json || {};
+    const vetoes = d.risk_vetoes || [];
+    const reasons = d.risk_reasons || [];
+    const outcome = String(d.outcome || "").toLowerCase();
+
+    const gate = d.risk_approved
+      ? `<span class="pill on">approved &times;${d.risk_contracts}</span>`
+      : (vetoes.length ? `<span class="pill alert">vetoed</span>`
+                       : `<span class="pill off">n/a</span>`);
+    const resolved =
+        outcome === "duplicate skipped"
+          ? `<div style="margin-top:6px"><span class="pill warn">already held &middot; not re-opened</span></div>`
+      : outcome === "no trade"
+          ? `<div style="margin-top:6px"><span class="pill off">passed</span></div>`
+      : outcome === "no candidates"
+          ? `<div style="margin-top:6px"><span class="pill off">nothing cleared the gate</span></div>`
+      : "";
+
+    const run = runById.get(d.run_id);
+    const closed = run && !run.market_open
+      ? `<div class="sub" style="color:var(--warn)">market closed</div>` : "";
+    const spread = c.short_symbol
+      ? `<div class="mono">${esc(c.underlying)} ${esc((c.kind || "").replace("_", " "))}</div>
+         <div class="sub">${c.short_strike}/${c.long_strike} &middot; ${c.dte}DTE
+         &middot; POP ${c.pop} &middot; ${money(c.credit)} credit</div>`
+      : `<span class="dim">${NB}</span>`;
+
+    return `<tr>
+      <td class="mono dim">${esc(shortTs(d.ts))}${closed}</td>
+      <td>${spread}</td>
+      <td>${edgeCell(c)}</td>
+      <td class="mono">${esc(d.llm_action || NB)}</td>
+      <td class="mono">${d.llm_confidence == null ? NB : Number(d.llm_confidence).toFixed(2)}</td>
+      <td>${gate}${resolved}${orderBadge(orderFor.get(d.id))}</td>
+      <td class="rationale">${esc(d.llm_rationale)}
+        ${vetoes.map(v => `<div class="veto">${esc(v)}</div>`).join("")}
+        ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="note">${esc(r)}</div>`).join("") : ""}
+        ${d.llm_error ? `<div class="note">${esc(llmErrLine(d.llm_error, d.llm_action))}</div>` : ""}
+      </td></tr>`;
+  }).join("");
+
+  const from = shown.length ? DEC.page * DEC.size + 1 : 0;
+  const to = Math.min(shown.length, (DEC.page + 1) * DEC.size);
+
+  $("decisions").innerHTML = `
+    <div class="tabs" style="margin-bottom:14px">${tabs}</div>
+    ${shown.length ? `<table><thead><tr>
+        <th>Time (UTC)</th><th>Candidate</th><th>Edge</th><th>Action</th>
+        <th>Conf.</th><th>Outcome</th><th>Reasoning</th></tr></thead>
+      <tbody>${body}</tbody></table>
+      <div class="pager">
+        <span class="sub dim">${from}&ndash;${to} of ${shown.length}</span>
+        <button data-dec-page="prev" ${DEC.page === 0 ? "disabled" : ""}>Previous</button>
+        <span class="sub dim">${DEC.page + 1} / ${pages}</span>
+        <button data-dec-page="next" ${DEC.page >= pages - 1 ? "disabled" : ""}>Next</button>
+      </div>`
+    : `<div class="empty"><strong>Nothing in this view</strong>
+         No decision has that outcome yet.</div>`}`;
 }
 
-/* The provider's raw error body is unreadable and tells a viewer nothing.
-   Say what happened instead. A failed call is not a failed cycle: the agent
-   carries on deterministically rather than guessing. Full text stays journalled. */
-function llmErrLine(raw, action) {
-  if (!raw) return "";
-  const code = String(raw).match(/(?:^|[^0-9])([45][0-9]{2})(?![0-9])/);
-  const what = code ? `provider call failed (HTTP ${code[1]})` : "provider call failed";
-  const then = action && action !== "no_trade"
-    ? "fell back to deterministic selection"
-    : "no trade taken";
-  return `${what} — ${then}`;
-}
+// One listener for the whole log; the table is replaced on every render, so
+// per-button handlers would be rebound constantly.
+document.addEventListener("click", (ev) => {
+  const f = ev.target.closest("[data-dec-filter]");
+  if (f) { DEC.filter = f.dataset.decFilter; DEC.page = 0; decisions(); return; }
+  const p = ev.target.closest("[data-dec-page]");
+  if (p) { DEC.page += p.dataset.decPage === "next" ? 1 : -1; decisions(); }
+});
 
 /* ------------------------------------------------------------------ */
 async function refresh() {
@@ -685,7 +834,14 @@ async function refresh() {
     }
     const held = live ? live.positions : bp;
     status(s, r); kpis(s, o, held, live); chart(e); funnel(r, d, o);
-    vols(r); positions(p, held, live); decisions(d, r, o);
+    // Spot prices come from the screening context of the most recent cycle
+    // that captured one - the same source the volatility cards use.
+    const ctxRun = (r || []).find(x => x.context_json && Object.keys(x.context_json).length);
+    const spots = {};
+    if (ctxRun) for (const [sym, v] of Object.entries(ctxRun.context_json)) {
+      if (v && v.spot != null) spots[sym] = v.spot;
+    }
+    vols(r); positions(p, held, live, spots); decisions(d, r, o);
   } catch (err) { console.error("Refresh error:", err); }
 }
 
