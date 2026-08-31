@@ -6,7 +6,7 @@ is deliberately odd in places — see §3.
 Slides: <https://claude.ai/code/artifact/33fbdd10-9ace-493f-a1c1-35f3ed49de54>
 Dashboard: <https://chong1120.github.io/Vetoed/>
 
-Runs about **6 minutes 26 seconds** at a normal narration pace. A 90-second cut
+Runs about **6 minutes 53 seconds** at a normal narration pace. A 90-second cut
 is in §2.
 
 ---
@@ -104,12 +104,19 @@ It can learn, but it can't learn its way around the risk controls.
 
 <break time="1.0s" />
 
-[11 — cut to the live dashboard]
-And this runs unattended. A schedule fires one full cycle roughly every thirty minutes during the US session, with nothing of mine switched on.
+[11a — screenshot 1: equity, funnel, volatility]
+And this runs unattended. A schedule fires one full cycle roughly every thirty minutes during the US session, with nothing of mine switched on. Every cycle reconciles against the broker first, so a restart can't duplicate a position.
 
-Every cycle reconciles against the broker before doing anything, so a restart can't duplicate a position, and every order carries an identifier the broker will refuse twice.
+This is the dashboard. Read the funnel downward. Eight spreads cleared the edge gate. One was selected. One survived all eight risk gates. And zero were sent, because the market was closed. Every row says dry run, and I've left it that way.
 
-This is the dashboard. The equity curve. The screening funnel. Implied against realised for each underlying. And every decision it made, including every trade the risk gates vetoed. The refusals are logged as carefully as the fills.
+<break time="0.5s" />
+
+[11b — screenshot 2: the decisions table]
+This is every decision it has made, including the ones it refused.
+
+Top row, the language model choosing. Apple, the three ten put credit spread, forty two dollars of measured edge, approved at twelve contracts.
+
+The row underneath is the one I'd point a judge at. The model call failed, a four twenty two, logged right there in the open. The agent didn't stop and it didn't guess. It fell back to arithmetic and reached the same spread. That's the fallback, firing for real.
 
 <break time="1.0s" />
 
@@ -185,8 +192,8 @@ the tone doesn't drift.
 | 3:59 | 8 | Risk |
 | 4:23 | 9 | It says no |
 | 4:47 | 10 | Learning on a leash |
-| 5:20 | — | **Cut to the live dashboard** |
-| 5:56 | 12 | Limits and close |
+| 5:20 | — | **Screenshot 1**, then **screenshot 2** (33s + 34s) |
+| 6:27 | 12 | Limits and close |
 
 Derived from word counts at 158 wpm plus the break tags. Your generated audio
 will differ by a few seconds — line the slides up to what you actually get.
