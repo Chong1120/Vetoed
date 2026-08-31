@@ -1085,6 +1085,16 @@ SELECT * FROM orders WHERE closed_ts IS NULL
 cap. Counting **dry-run or failed orders** here would invent risk that does not
 exist and could veto real trades.
 
+**Reading it.** `python scripts/show_journal.py` prints the account, every
+cycle, every decision labelled MODEL or ARITHMETIC, and every order, then
+flags fallbacks, uncertain orders and dry-run-only histories. `--check` prints
+only the warnings and exits non-zero, which makes it usable as a gate.
+
+It earns its place because the journal is the only record of a class of
+failure that leaves no other trace: the agent degrading to deterministic
+selection while every outward signal — workflow status, order journalled,
+cycle completed — still reads as success.
+
 The dashboard (`dashboard/api.py` + `static/index.html`) is **read-only by
 design** — there is no route that places, cancels, or modifies an order. It
 renders the equity curve, open positions, and every decision including the

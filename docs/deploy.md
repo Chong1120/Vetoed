@@ -194,6 +194,21 @@ A VPS makes ticks punctual; it does not make them continuous.
 | Runner cancelled | SIGTERM handled; the deterministic id prevents a duplicate on re-run |
 | Two ticks overlap | `concurrency` group prevents it |
 
+## Verifying a cycle actually worked
+
+`scripts/show_journal.py` is the tool for this, and it exists because a green
+run proves less than it appears to. Both silent degradations found during
+development — a Cloudflare block that looked like a bad key, and an undefined
+GitHub variable that expanded to an empty model name — produced a **successful
+workflow run** with an order journalled, and were legible only in `llm_error`.
+
+```bash
+git pull && python scripts/show_journal.py --check
+```
+
+Exits non-zero if anything is worth looking at, so it also works as a
+post-session gate.
+
 ## Demonstrating it without waiting for a tick
 
 **Actions → Vetoed agent → Run workflow.** Defaults to **dry-run**: a full

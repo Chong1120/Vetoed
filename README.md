@@ -247,7 +247,49 @@ closes that no cron expression does.
 The agent commits `journal/trades.db` back after every cycle, which also
 triggers the Pages rebuild — so the public dashboard updates itself.
 
-### 6. Stop it
+### 6. Check what it actually did
+
+**A green workflow run is not evidence the agent worked.** Twice during
+development a cycle finished, journalled an order and reported success while
+the judgement layer had silently degraded to arithmetic — once because a
+Cloudflare block looked like a bad key, once because an undefined GitHub
+variable expanded to an empty model name. Neither was visible in the run
+status.
+
+So read the journal, not the checkmark:
+
+```bash
+git pull                                  # the agent commits its journal back
+python scripts/show_journal.py            # last 10 cycles
+python scripts/show_journal.py --all      # everything
+python scripts/show_journal.py --check    # warnings only; exit 1 if any
+```
+
+It prints equity and realised P&L, every cycle with its guardrail notes, every
+decision labelled **MODEL** or **ARITHMETIC**, every order with its status, and
+then flags what is easy to miss:
+
+| Warning | Means |
+|---|---|
+| *every decision came from arithmetic* | The model is configured but never answering — run `scripts/check_llm.py` |
+| *N fell back while M came from the model* | Intermittent failures; the `ERROR:` lines name the cause |
+| *N orders are UNCERTAIN* | We do not know whether Alpaca received them. Counted as live risk until the next cycle reconciles |
+| *N dry-run orders and no live ones* | Nothing has reached the broker |
+
+The three lines worth knowing by sight:
+
+```
+#8  ... open_spread  approved   MODEL        <- the model chose
+    AAPL's put credit spread ... VRP edge of $42.34 ...
+#7  ... open_spread  approved   ARITHMETIC   <- it did not; see ERROR below
+    ERROR: HTTPError 422: The model must be provided in the request
+```
+
+Two other views of the same data: the workflow run's **Summary** tab shows
+`health.json` for that cycle, and <https://chong1120.github.io/Vetoed/> renders
+the whole journal as a page.
+
+### 7. Stop it
 
 **Actions → Vetoed agent → ⋯ → Disable workflow.** Takes effect immediately.
 
@@ -255,7 +297,7 @@ Stopping does **not** close open positions. Exits are evaluated by the running
 agent, so a disabled workflow stops managing. To flatten, close positions in
 the Alpaca dashboard.
 
-### 7. Deploy a new version
+### 8. Deploy a new version
 
 `git push` to `main`. The next tick uses it. Tests run separately on push, so
 check Actions is green before letting a tick pick up a change.
