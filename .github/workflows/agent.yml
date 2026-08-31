@@ -48,7 +48,9 @@ on:
         description: "mode - dry-run journals a decision but submits nothing"
         type: choice
         default: dry-run
-        options: [dry-run, live]
+        # session = start once, keep cycling for the whole US session in a
+        # single job. This is the answer to the schedule never firing.
+        options: [dry-run, live, session]
       force:
         description: "force - run a full cycle even if the market is closed (dry-run only)"
         type: boolean
@@ -69,9 +71,11 @@ permissions:
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    # A cycle takes ~40s. Ten minutes is generous and stops a hung MCP or a
-    # stalled Alpaca call from occupying a runner for six hours.
-    timeout-minutes: 10
+    # A session job holds the runner for most of the trading day, so the cap
+    # lives here while the per-step timeouts below keep the old protection:
+    # a single cycle still gets 10 minutes, so a hung MCP or stalled Alpaca
+    # call cannot quietly occupy a runner for hours.
+    timeout-minutes: 355
 
     steps:
       - uses: actions/checkout@v4
@@ -96,6 +100,8 @@ jobs:
           echo "paper trading confirmed"
 
       - name: Run one cycle
+        if: inputs.mode != 'session'
+        timeout-minutes: 10
         env:
           # GitHub masks secret values in logs automatically.
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
@@ -122,6 +128,25 @@ jobs:
           fi
           echo "flags: ${FLAGS:-<dry run>}"
           python -m agent.loop $FLAGS
+
+      # One trigger, many cycles. The schedule has never fired, so this is how
+      # the agent runs a session without someone pressing a button every half
+      # hour. The journal is pushed after every cycle, not at the end, so a
+      # cancelled job does not take the day's record with it.
+      - name: Run a full session
+        if: inputs.mode == 'session'
+        timeout-minutes: 350
+        env:
+          # GitHub masks secret values in logs automatically.
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          ALPACA_PAPER_TRADE: ${{ secrets.ALPACA_PAPER_TRADE }}
+          # Judgement layer. Both optional: with neither, brain.py uses
+          # deterministic selection and the agent keeps trading.
+          FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
+          FEATHERLESS_MODEL: ${{ vars.FEATHERLESS_MODEL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: bash scripts/session.sh --live
 
       - name: Commit the journal
         # Runs even if the cycle failed: a partial journal is still the record
