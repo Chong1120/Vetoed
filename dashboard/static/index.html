@@ -543,7 +543,7 @@ function edgeCell(c) {
   const ivrv = (c.short_iv && c.realized_vol)
     ? `IV ${(c.short_iv * 100).toFixed(1)}% vs RV ${(c.realized_vol * 100).toFixed(1)}%` : "";
   return `<div class="edge-v" style="color:${col}">${signed(v)}</div>`
-    + `<div class="sub">real ${money(c.ev)} &minus; r-n ${money(c.ev_rn)}</div>`
+    + `<div class="sub">real ${money(c.ev)} vs implied ${money(c.ev_rn)}</div>`
     + (ivrv ? `<div class="sub">${ivrv}</div>` : "");
 }
 
@@ -559,8 +559,12 @@ function orderBadge(o) {
   else if (s === "not_filled")
     pill = `<span class="pill warn">never reached broker</span>`;
   else if (s === "failed")  pill = `<span class="pill alert">submit failed</span>`;
-  else if ((o.filled_qty || 0) > 0) pill = `<span class="pill on">filled &times;${o.filled_qty}</span>`;
-  else                      pill = `<span class="pill">${esc(o.status)}</span>`;
+  else if (s === "pending_new" || s === "accepted" || s === "new")
+    pill = `<span class="pill info">pending fill</span>`;
+  else if ((o.filled_qty || 0) > 0 || s === "filled")
+    pill = `<span class="pill on">filled &times;${o.filled_qty || 1}</span>`;
+  else
+    pill = `<span class="pill">${esc(o.status)}</span>`;
   return `<div style="margin-top:6px">${pill}</div>`;
 }
 
@@ -584,30 +588,33 @@ function decisions(rows, runs, orders) {
       const c = d.candidate_json || {};
       const vetoes = d.risk_vetoes || [];
       const reasons = d.risk_reasons || [];
-      // The gate's answer and what became of it are different facts. A
-      // decision can pass every risk check and still never reach the broker -
-      // the idempotency guard refusing a spread already held, for instance.
-      // Showing only "approved x12" there reads as a trade that happened.
+      
       const outcome = String(d.outcome || "").toLowerCase();
-      const gate = d.risk_approved
-        ? `<span class="pill on">approved &times;${d.risk_contracts}</span>`
-        : (vetoes.length ? `<span class="pill alert">vetoed</span>`
-                         : `<span class="pill off">n/a</span>`);
-      const resolved =
-          outcome === "duplicate skipped"
-            ? `<div style="margin-top:6px"><span class="pill warn">already held &middot; not re-opened</span></div>`
-        : outcome === "no trade"
-            ? `<div style="margin-top:6px"><span class="pill off">passed</span></div>`
-        : outcome === "no candidates"
-            ? `<div style="margin-top:6px"><span class="pill off">nothing cleared the gate</span></div>`
-        : "";
+      let gate = "";
+      if (outcome === "duplicate skipped") {
+        gate = `<span class="pill warn">SKIPPED &middot; ALREADY HELD</span><div class="sub dim" style="margin-top:2px">risk approved &times;${d.risk_contracts}</div>`;
+      } else if (d.risk_approved) {
+        gate = `<span class="pill on">approved &times;${d.risk_contracts}</span>`;
+      } else if (vetoes.length) {
+        gate = `<span class="pill alert">vetoed</span>`;
+      } else if (outcome === "no trade" || outcome === "no candidates") {
+        gate = `<span class="pill off">passed</span>`;
+      } else {
+        gate = `<span class="pill off">n/a</span>`;
+      }
+
       const run = runById.get(d.run_id);
       const closed = run && !run.market_open
         ? `<div class="sub" style="color:var(--warn)">market closed</div>` : "";
+      
+      const popStr = c.pop != null
+        ? (Number(c.pop) <= 1 ? (Number(c.pop) * 100).toFixed(1) + "%" : esc(c.pop))
+        : NB;
+
       const spread = c.short_symbol
         ? `<div class="mono">${esc(c.underlying)} ${esc(c.kind)}</div>
            <div class="sub">${c.short_strike}/${c.long_strike} &middot; ${c.dte}DTE
-           &middot; POP ${c.pop} &middot; ${money(c.credit)} credit</div>`
+           &middot; POP ${popStr} &middot; ${money(c.credit)} credit</div>`
         : `<span class="dim">${NB}</span>`;
       return `<tr>
         <td class="mono dim">${esc(shortTs(d.ts))}${closed}</td>
@@ -615,7 +622,7 @@ function decisions(rows, runs, orders) {
         <td>${edgeCell(c)}</td>
         <td class="mono">${esc(d.llm_action || NB)}</td>
         <td class="mono">${d.llm_confidence == null ? NB : Number(d.llm_confidence).toFixed(2)}</td>
-        <td>${gate}${resolved}${orderBadge(orderFor.get(d.id))}</td>
+        <td>${gate}${orderBadge(orderFor.get(d.id))}</td>
         <td class="rationale">${esc(d.llm_rationale)}
           ${vetoes.map(v => `<div class="veto">${esc(v)}</div>`).join("")}
           ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="note">${esc(r)}</div>`).join("") : ""}

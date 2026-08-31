@@ -24,46 +24,24 @@ name: Vetoed agent
 
 on:
   schedule:
-    # Times are UTC. GitHub cron has no timezone, so the window is deliberately
-    # WIDE - 13:00-21:00 UTC covers the US session under both EDT (13:30-20:00)
-    # and EST (14:30-21:00), so no DST changeover can silently stop trading.
-    #
-    # The window is a coarse filter, not the decision. Alpaca's own clock is
-    # checked at the top of every cycle and is authoritative: it knows holidays
-    # and early closes, which no cron expression does. Ticks outside the session
-    # exit in about a second having done nothing.
-    # NOT */30. That fires at :00 and :30, the two most congested minutes in
-    # GitHub's cron queue, where runs are delayed worst and dropped most often.
-    # :07 and :37 is still approximately every 30 minutes, off the crowd.
-    - cron: "7,37 13-21 * * 1-5"
+    # 13:25 UTC = 09:25 AM EDT (US Market Open Monday-Friday).
+    # Runs the full session container automatically for the entire trading day.
+    # Also includes 17:00 UTC (1:00 PM EDT) as a fail-safe backup trigger.
+    - cron: "25 13 * * 1-5"
+    - cron: "0 17 * * 1-5"
 
   # Manual trigger, for demos and for proving the thing works without waiting
   # for a tick. Defaults to a DRY RUN so an accidental click cannot trade.
   workflow_dispatch:
     inputs:
-      # GitHub renders `description` as the field label and hides the input
-      # name entirely, so the name is repeated here - otherwise the docs refer
-      # to `force` and the form shows an unlabelled checkbox.
       mode:
         description: "mode - dry-run journals a decision but submits nothing"
         type: choice
         default: dry-run
-        # session = start once, keep cycling for the whole US session in a
-        # single job. This is the answer to the schedule never firing.
         options: [dry-run, live, session]
       interval_minutes:
-        # How often the agent LOOKS: reconcile, manage exits, score the board.
-        # Not how often it opens a position - entries stay pinned to ~30
-        # minutes below, whatever this is set to. Exits are the time-sensitive
-        # half, so they are checked far more often than entries are taken.
         description: "interval_minutes - how often to analyse and check exits"
         type: choice
-        # 10, not 5. The exit check is the half worth doing often, but the
-        # quotes behind it are INDICATIVE, not exchange BBO - so sampling a
-        # noisy approximation six times an hour mostly buys more chances for
-        # a bad print to trip the 2x stop and close a healthy position for a
-        # real loss. 10 keeps almost all of the responsiveness at half that
-        # exposure, and a gap that matters is still there ten minutes later.
         default: "10"
         options: ["10", "5", "30"]
       force:
@@ -86,10 +64,6 @@ permissions:
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    # A session job holds the runner for most of the trading day, so the cap
-    # lives here while the per-step timeouts below keep the old protection:
-    # a single cycle still gets 10 minutes, so a hung MCP or stalled Alpaca
-    # call cannot quietly occupy a runner for hours.
     timeout-minutes: 355
 
     steps:
@@ -114,50 +88,37 @@ jobs:
           fi
           echo "paper trading confirmed"
 
+      # Single cycle execution (manual dispatch: dry-run or live)
       - name: Run one cycle
-        if: inputs.mode != 'session'
+        if: inputs.mode != 'session' && github.event_name != 'schedule'
         timeout-minutes: 10
         env:
-          # GitHub masks secret values in logs automatically.
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           ALPACA_PAPER_TRADE: ${{ secrets.ALPACA_PAPER_TRADE }}
-          # Judgement layer. Both optional: with neither, brain.py uses
-          # deterministic selection and the agent keeps trading.
           FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
           FEATHERLESS_MODEL: ${{ vars.FEATHERLESS_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          # Scheduled ticks trade. Manual runs are dry unless explicitly asked.
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            FLAGS="--live"
-          elif [ "${{ inputs.mode }}" = "live" ]; then
+          if [ "${{ inputs.mode }}" = "live" ]; then
             FLAGS="--live"
           else
             FLAGS=""
           fi
-          # --force is a debugging aid for a closed market. Never combined with
-          # --live, so it cannot be used to trade weekend quotes.
           if [ "${{ inputs.force }}" = "true" ] && [ -z "$FLAGS" ]; then
             FLAGS="--force"
           fi
           echo "flags: ${FLAGS:-<dry run>}"
           python -m agent.loop $FLAGS
 
-      # One trigger, many cycles. The schedule has never fired, so this is how
-      # the agent runs a session without someone pressing a button every half
-      # hour. The journal is pushed after every cycle, not at the end, so a
-      # cancelled job does not take the day's record with it.
+      # Full session execution (automatic scheduled daily run OR manual session dispatch)
       - name: Run a full session
-        if: inputs.mode == 'session'
+        if: inputs.mode == 'session' || github.event_name == 'schedule'
         timeout-minutes: 350
         env:
-          # GitHub masks secret values in logs automatically.
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           ALPACA_PAPER_TRADE: ${{ secrets.ALPACA_PAPER_TRADE }}
-          # Judgement layer. Both optional: with neither, brain.py uses
-          # deterministic selection and the agent keeps trading.
           FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
           FEATHERLESS_MODEL: ${{ vars.FEATHERLESS_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -165,12 +126,9 @@ jobs:
           MINUTES="${{ inputs.interval_minutes }}"
           MINUTES="${MINUTES:-10}"
           export VETOED_INTERVAL_SECONDS=$(( MINUTES * 60 ))
-          # Entries stay at ~30 minutes however often we analyse, so the
-          # documented trading cadence does not move when this dial does.
-          # At least every other pass, so a 30-minute analysis still trades.
           export VETOED_ENTRY_EVERY=$(( 30 / MINUTES ))
           [ "$VETOED_ENTRY_EVERY" -lt 1 ] && export VETOED_ENTRY_EVERY=1
-          echo "analyse every ${MINUTES}m, open every ${VETOED_ENTRY_EVERY} pass(es)"
+          echo "automatic market session: analyse every ${MINUTES}m, open every ${VETOED_ENTRY_EVERY} pass(es)"
           bash scripts/session.sh --live
 
       - name: Commit the journal
