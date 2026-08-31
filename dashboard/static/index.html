@@ -242,6 +242,11 @@
 
 <script>
 const $ = id => document.getElementById(id);
+// Read-only Alpaca proxy for the PUBLISHED page. It holds the credentials so
+// this file never has to - see api/live.py. Empty means "no live source", and
+// the page falls back to the journal snapshot, which is the correct default.
+const LIVE_API = "https://vetoed-three.vercel.app/api/live";
+
 const NB = "&mdash;";
 
 const money = (v, dp = 2) => v == null ? NB :
@@ -825,10 +830,18 @@ async function refresh() {
     // Live view exists only when a local server holds the credentials. The
     // published snapshot has no server and must never carry keys, so this is
     // absent there by design - fall back to the journal's last reading.
+    // Live account, from whichever source can supply it. Locally that is this
+    // server; on the published page it is LIVE_API, a read-only proxy holding
+    // the Alpaca credentials - a static host has no server, and putting the
+    // keys in this file would let any visitor trade the account.
+    //
+    // Both are optional. If neither answers we render from the journal's last
+    // reading and label it as such, which is always valid.
     let live = null;
-    if (MODE === "live") {
+    const endpoint = (MODE === "live") ? "/api/live" : LIVE_API;
+    if (endpoint) {
       try {
-        const res = await fetch("/api/live", { cache: "no-store" });
+        const res = await fetch(endpoint, { cache: "no-store" });
         if (res.ok) { const j = await res.json(); if (j.available) live = j; }
       } catch (_) { /* stays null; the snapshot path is always valid */ }
     }
