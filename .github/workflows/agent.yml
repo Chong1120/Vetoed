@@ -58,8 +58,14 @@ on:
         # half, so they are checked far more often than entries are taken.
         description: "interval_minutes - how often to analyse and check exits"
         type: choice
-        default: "5"
-        options: ["5", "10", "30"]
+        # 10, not 5. The exit check is the half worth doing often, but the
+        # quotes behind it are INDICATIVE, not exchange BBO - so sampling a
+        # noisy approximation six times an hour mostly buys more chances for
+        # a bad print to trip the 2x stop and close a healthy position for a
+        # real loss. 10 keeps almost all of the responsiveness at half that
+        # exposure, and a gap that matters is still there ten minutes later.
+        default: "10"
+        options: ["10", "5", "30"]
       force:
         description: "force - run a full cycle even if the market is closed (dry-run only)"
         type: boolean
@@ -157,7 +163,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           MINUTES="${{ inputs.interval_minutes }}"
-          MINUTES="${MINUTES:-5}"
+          MINUTES="${MINUTES:-10}"
           export VETOED_INTERVAL_SECONDS=$(( MINUTES * 60 ))
           # Entries stay at ~30 minutes however often we analyse, so the
           # documented trading cadence does not move when this dial does.

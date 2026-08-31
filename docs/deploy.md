@@ -160,7 +160,7 @@ Two layers, and only one is authoritative:
   the top of every cycle. It knows holidays and early closes, which no cron
   expression does. Ticks outside the session exit in about a second.
 
-So the agent fires **approximately every 5 minutes, opening a new position on at most one pass in six (~30 minutes)** during the US market
+So the agent fires **approximately every 10 minutes, opening a new position on at most one pass in three (~30 minutes)** during the US market
 session, and does nothing outside it.
 
 `--force` bypasses the market check for one debugging cycle. The workflow never

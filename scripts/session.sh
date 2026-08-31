@@ -26,8 +26,8 @@ set -uo pipefail
 # real exposure: a stop-loss at 2x credit that is not looked at for half an
 # hour can be well past its trigger before anything notices. So exits are
 # checked often and entries stay paced.
-INTERVAL="${VETOED_INTERVAL_SECONDS:-300}"        # analyse every 5 minutes
-ENTRY_EVERY="${VETOED_ENTRY_EVERY:-6}"            # ...open on every 6th (30 min)
+INTERVAL="${VETOED_INTERVAL_SECONDS:-600}"        # analyse every 10 minutes
+ENTRY_EVERY="${VETOED_ENTRY_EVERY:-3}"            # ...open on every 3rd (30 min)
 BUDGET="${VETOED_SESSION_SECONDS:-20400}"     # 5h40m, inside the 6h job cap
 FLAGS="$*"
 

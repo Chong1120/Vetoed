@@ -51,7 +51,7 @@ points — `loop.assert_paper_trading()` (before any network call),
 overridable, and no live-capital path exists.
 
 **In production the agent runs itself** on a GitHub Actions schedule,
-approximately every 5 minutes, opening a new position on at most one pass in six (~30 minutes) during the US market session. Each tick is a
+approximately every 10 minutes, opening a new position on at most one pass in three (~30 minutes) during the US market session. Each tick is a
 fresh container running one cycle — which is a cold start every time, and safe
 because the risk gates are fed broker state rather than the local journal. See
 [deploy.md](deploy.md) for the idempotency design.
