@@ -144,6 +144,17 @@ class OrderResult:
     until reconcile.py confirms otherwise against the broker."""
 
 
+def _is_duplicate_id(payload) -> bool:
+    """Did the broker refuse this because we already sent it?
+
+    Alpaca answers 422 with code 40010001, "client_order_id must be unique".
+    That is the deterministic id doing exactly its job across a restart or a
+    repeated cycle, so it is a known outcome, not an unknown one.
+    """
+    text = str(payload).lower()
+    return "client_order_id must be unique" in text or "40010001" in text
+
+
 def _is_definite_rejection(exc: Exception) -> bool:
     text = ("%s %s" % (type(exc).__name__, exc)).lower()
     return any(marker in text for marker in _DEFINITE_REJECTION)
@@ -267,6 +278,20 @@ class AlpacaMCP:
 
         if isinstance(out, dict) and out.get("id"):
             return OrderResult(True, out)
+
+        # "client_order_id must be unique" is the idempotency guard firing, and
+        # it is the one rejection that carries certainty rather than doubt: this
+        # exact spread was already submitted today under this exact id. Calling
+        # that "uncertain" inverts its meaning - it would be journalled as an
+        # order whose fate is unknown, when in fact its fate is the one thing
+        # we are sure of. Not an error, and nothing to retry.
+        if _is_duplicate_id(out):
+            return OrderResult(
+                False, {"client_order_id": client_order_id},
+                "already submitted under %s - the duplicate guard refused a "
+                "second copy" % client_order_id,
+                uncertain=False)
+
         # A response we cannot parse is not a rejection either.
         return OrderResult(False, out if isinstance(out, dict) else {},
                            "unexpected response: %s" % str(out)[:400],

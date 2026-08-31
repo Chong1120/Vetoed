@@ -101,12 +101,46 @@ class Reconciliation:
         return len(self.open_spreads) + len(self.uncertain)
 
 
+class UnreadableBrokerResponse(RuntimeError):
+    """The broker answered in a shape we cannot interpret."""
+
+
+def _as_list(payload, what: str) -> list:
+    """Get the list out of a broker response, or refuse to guess.
+
+    The MCP server wraps results: get_all_positions returns {"result": [...]},
+    not a bare list. The original code tested `isinstance(payload, list)` and
+    silently returned nothing for anything else - so an unreadable response
+    was indistinguishable from a flat "you hold no positions".
+
+    That is not a cosmetic difference. A live AAPL spread was marked closed in
+    the journal while it was still open at Alpaca, and the next cycle tried to
+    re-enter it. Only the deterministic client_order_id stopped a duplicate
+    position being opened. An unparseable answer must fail closed - raise, so
+    fetch_broker_state reports the broker as unreachable and the cycle opens
+    nothing - never quietly read as "empty".
+    """
+    if payload is None:
+        raise UnreadableBrokerResponse("%s: no response" % what)
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("result", "positions", "orders", "data"):
+            if isinstance(payload.get(key), list):
+                return payload[key]
+        # An error object is a legitimate answer, and it is not "empty".
+        if "error" in payload:
+            raise UnreadableBrokerResponse(
+                "%s: broker returned an error: %s" % (what, payload["error"]))
+    raise UnreadableBrokerResponse(
+        "%s: unrecognised response type %s" % (what, type(payload).__name__))
+
+
 def _leg_map(positions) -> dict:
     out: dict = {}
-    if isinstance(positions, list):
-        for p in positions:
-            if isinstance(p, dict) and p.get("symbol"):
-                out[str(p["symbol"])] = p
+    for p in _as_list(positions, "positions"):
+        if isinstance(p, dict) and p.get("symbol"):
+            out[str(p["symbol"])] = p
     return out
 
 
@@ -114,17 +148,16 @@ def _order_ids(orders) -> tuple[set, set]:
     """(client_order_ids, option symbols) across the broker's open orders."""
     ids: set = set()
     syms: set = set()
-    if isinstance(orders, list):
-        for o in orders:
-            if not isinstance(o, dict):
-                continue
-            if o.get("client_order_id"):
-                ids.add(str(o["client_order_id"]))
-            for leg in (o.get("legs") or []):
-                if isinstance(leg, dict) and leg.get("symbol"):
-                    syms.add(str(leg["symbol"]))
-            if o.get("symbol"):
-                syms.add(str(o["symbol"]))
+    for o in _as_list(orders, "open orders"):
+        if not isinstance(o, dict):
+            continue
+        if o.get("client_order_id"):
+            ids.add(str(o["client_order_id"]))
+        for leg in (o.get("legs") or []):
+            if isinstance(leg, dict) and leg.get("symbol"):
+                syms.add(str(leg["symbol"]))
+        if o.get("symbol"):
+            syms.add(str(o["symbol"]))
     return ids, syms
 
 
@@ -133,11 +166,15 @@ async def fetch_broker_state(mcp) -> BrokerState:
     try:
         positions = await mcp.positions()
         orders = await mcp.orders(status="open")
+        # Parsing belongs inside the guard. A response we cannot read is a
+        # broker we cannot see, and must be reported as such - not allowed to
+        # escape as an exception, and never softened into "no positions".
+        legs = _leg_map(positions)
+        ids, syms = _order_ids(orders)
     except Exception as exc:
         return BrokerState(reachable=False,
                            error="%s: %s" % (type(exc).__name__, exc))
-    ids, syms = _order_ids(orders)
-    return BrokerState(legs=_leg_map(positions), open_order_ids=ids,
+    return BrokerState(legs=legs, open_order_ids=ids,
                        open_order_symbols=syms)
 
 
