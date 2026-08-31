@@ -14,6 +14,7 @@ hosted snapshot and this live view can never disagree.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
@@ -78,3 +79,78 @@ def index() -> FileResponse:
 
 if os.path.isdir(STATIC):
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+# --------------------------------------------------------------------------- #
+# Live view - LOCAL ONLY, and deliberately so.
+#
+# This asks Alpaca directly rather than reading the journal, so it is current
+# to the second instead of to the last cycle. It exists only in this process,
+# which holds the API credentials in its own environment and never ships them
+# anywhere.
+#
+# The published GitHub Pages build CANNOT have this. A static page has no
+# server, so for the browser to call Alpaca the keys would have to be embedded
+# in the page itself - readable by anyone who opens it, and sufficient to place
+# trades in the account. The static snapshot is the correct trade-off there:
+# the URL never sleeps, and it leaks nothing.
+#
+# Read-only, like the rest of this module. No route here can trade.
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/live")
+def live() -> JSONResponse:
+    """Positions and account, straight from Alpaca. 503 if unavailable."""
+    # Same as every other entry point: read .env when running locally. In CI
+    # and on Pages there is no .env and no credentials, which is the point -
+    # this endpoint then reports unavailable and the page uses the snapshot.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass
+
+    key = os.getenv("ALPACA_API_KEY", "").strip()
+    secret = os.getenv("ALPACA_SECRET_KEY", "").strip()
+    if not key or not secret:
+        return JSONResponse({"available": False,
+                             "reason": "no credentials in this environment"},
+                            status_code=503)
+    if os.getenv("ALPACA_PAPER_TRADE", "").strip().lower() != "true":
+        # Same fail-closed rule the agent uses. A dashboard is not a reason to
+        # relax it, and reading a live-money account here is not intended.
+        return JSONResponse({"available": False,
+                             "reason": "ALPACA_PAPER_TRADE is not 'true'"},
+                            status_code=503)
+    try:
+        from alpaca.trading.client import TradingClient
+        client = TradingClient(key, secret, paper=True)
+        acct = client.get_account()
+        positions = client.get_all_positions()
+    except Exception as exc:                        # network, auth, rate limit
+        return JSONResponse({"available": False,
+                             "reason": "%s: %s" % (type(exc).__name__, exc)},
+                            status_code=503)
+
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    return JSONResponse({
+        "available": True,
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "equity": num(acct.equity),
+        "last_equity": num(acct.last_equity),
+        "cash": num(acct.cash),
+        "buying_power": num(acct.buying_power),
+        "positions": [{
+            "symbol": p.symbol,
+            "qty": num(p.qty),
+            "avg_price": num(p.avg_entry_price),
+            "current_price": num(p.current_price),
+            "market_value": num(p.market_value),
+            "unrealised": num(p.unrealized_pl),
+        } for p in positions],
+    })

@@ -286,7 +286,7 @@ function status(summary, runs) {
 }
 
 /* ------------------------------------------------------------------ */
-function kpis(s, orders, broker) {
+function kpis(s, orders, broker, live) {
   const start = s.equity_start, latest = s.equity_latest;
   const chg = s.equity_change;
   const chgPct = (start && chg != null && start !== 0) ? (chg / start) * 100 : null;
@@ -304,8 +304,10 @@ function kpis(s, orders, broker) {
     : null;
 
   const items = [
-    ["Equity", latest == null ? NB : money(latest), "",
-     start == null ? "" : "started " + money(start)],
+    ["Equity", (live && live.equity != null) ? money(live.equity)
+                : (latest == null ? NB : money(latest)), "",
+     (live && live.equity != null) ? "live from Alpaca"
+        : (start == null ? "" : "started " + money(start))],
     ["Total P&amp;L", chg == null ? NB : signed(chg), cls(chg),
      chgPct == null ? "" : pct(chgPct) + " on starting equity"],
     ["Realised P&amp;L", signed(s.realised_pnl || 0), cls(s.realised_pnl),
@@ -459,7 +461,7 @@ function vols(runs) {
    spread was marked closed here while the account still held both legs, and
    the page had no way to reveal it. If these two ever diverge again, it is
    now visible on the page rather than buried in the database. */
-function positions(rows, broker) {
+function positions(rows, broker, live) {
   broker = broker || [];
   let html = "";
 
@@ -490,11 +492,14 @@ function positions(rows, broker) {
     // open Alpaca tab will see different figures and reasonably conclude the
     // page is wrong. It is not wrong, it is timestamped, and it should say so.
     const asOf = broker[0] && broker[0].ts ? shortTs(broker[0].ts) : null;
+    const tag = live
+      ? `<span class="pill on">live &middot; ${esc(shortTs(live.fetched_at))} UTC</span>`
+      : (asOf ? `<span class="dim">&middot; as read at ${esc(asOf)} UTC,
+          not live &mdash; Alpaca will differ as prices move</span>` : "");
     html += `<div class="sub" style="margin:18px 0 8px">
         Held at Alpaca &middot; ${broker.length} leg(s) &middot;
         unrealised <span class="${pnl < 0 ? "neg" : "pos"}">${money(pnl)}</span>
-        ${asOf ? `<span class="dim">&middot; as read at ${esc(asOf)} UTC,
-          not live &mdash; Alpaca will differ as prices move</span>` : ""}
+        ${tag}
       </div>
       <table><thead><tr>
         <th>Contract</th><th>Qty</th><th>Avg price</th>
@@ -611,8 +616,20 @@ async function refresh() {
       get("summary"), get("equity"), get("positions"),
       get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200"),
       get("broker_positions")]);
-    status(s, r); kpis(s, o, bp); chart(e); funnel(r, d, o);
-    vols(r); positions(p, bp); decisions(d, r, o);
+
+    // Live view exists only when a local server holds the credentials. The
+    // published snapshot has no server and must never carry keys, so this is
+    // absent there by design - fall back to the journal's last reading.
+    let live = null;
+    if (MODE === "live") {
+      try {
+        const res = await fetch("/api/live");
+        if (res.ok) { const j = await res.json(); if (j.available) live = j; }
+      } catch (_) { /* stays null; the snapshot path is always valid */ }
+    }
+    const held = live ? live.positions : bp;
+    status(s, r); kpis(s, o, held, live); chart(e); funnel(r, d, o);
+    vols(r); positions(p, held, live); decisions(d, r, o);
   } catch (err) { console.error(err); }
 }
 
