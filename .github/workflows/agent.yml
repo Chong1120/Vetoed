@@ -51,6 +51,13 @@ on:
         # session = start once, keep cycling for the whole US session in a
         # single job. This is the answer to the schedule never firing.
         options: [dry-run, live, session]
+      interval_minutes:
+        # Session mode only. 5 exists to prove the loop actually cycles without
+        # waiting half an hour to find out; 30 is the operating cadence.
+        description: "interval_minutes - minutes between cycles in session mode"
+        type: choice
+        default: "5"
+        options: ["5", "10", "30"]
       force:
         description: "force - run a full cycle even if the market is closed (dry-run only)"
         type: boolean
@@ -146,7 +153,11 @@ jobs:
           FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
           FEATHERLESS_MODEL: ${{ vars.FEATHERLESS_MODEL }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: bash scripts/session.sh --live
+        run: |
+          MINUTES="${{ inputs.interval_minutes }}"
+          export VETOED_INTERVAL_SECONDS=$(( ${MINUTES:-30} * 60 ))
+          echo "cycling every ${MINUTES:-30} minute(s)"
+          bash scripts/session.sh --live
 
       - name: Commit the journal
         # Runs even if the cycle failed: a partial journal is still the record
