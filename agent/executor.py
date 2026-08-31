@@ -22,6 +22,7 @@ never done here.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -36,6 +37,12 @@ from mcp.client.stdio import stdio_client
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_NAME = "alpaca-mcp-server"
+
+
+# A tool call that has not answered in this long is not going to. Long enough
+# for a slow option-chain read, short enough that a stuck server costs one
+# cycle instead of the trading day.
+MCP_CALL_TIMEOUT_SECONDS = 90
 
 
 class MCPError(RuntimeError):
@@ -191,9 +198,26 @@ class AlpacaMCP:
                 await self._ctx.__aexit__(*exc)
 
     async def call(self, name: str, args: dict | None = None) -> Any:
+        """Call one MCP tool, with a bound on how long it may take.
+
+        Without this a hung server hangs the cycle, and a session job holds its
+        runner for hours having journalled nothing - which looks exactly like a
+        dead agent and is not. brain.py already bounds its own HTTP call; this
+        is the same discipline for the only path that reaches the broker.
+
+        A timeout raises, and the caller treats that as UNCERTAIN rather than
+        failed - the whole point of that distinction. Reconcile resolves it
+        against the broker on the next cycle.
+        """
         if self._session is None:
             raise MCPError("session not started")
-        res = await self._session.call_tool(name, args or {})
+        try:
+            res = await asyncio.wait_for(
+                self._session.call_tool(name, args or {}),
+                timeout=MCP_CALL_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            raise MCPError("%s timed out after %ds - broker state unknown"
+                           % (name, MCP_CALL_TIMEOUT_SECONDS))
         if getattr(res, "isError", False):
             raise MCPError("%s failed: %s" % (name, res.content))
         if not res.content:

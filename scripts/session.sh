@@ -64,9 +64,27 @@ while :; do
     echo "analysis pass - exits managed, entry withheld"
   fi
 
-  # Never abort the session on one bad cycle. The journal records the failure
-  # and the next pass reconciles against the broker from scratch.
-  python -m agent.loop $PASS || echo "::warning::cycle ${n} exited non-zero"
+  # A HARD CEILING ON THE CYCLE ITSELF.
+  #
+  # A cycle takes about a minute. When one does not come back, the session
+  # holds its runner for hours having journalled nothing, which is
+  # indistinguishable from a dead agent - and the individual timeouts inside
+  # the agent can only cover the failures they were written for. This covers
+  # the rest.
+  #
+  # Killing a cycle is safe by construction: every entry carries a
+  # deterministic client_order_id that Alpaca refuses twice, and the next pass
+  # rebuilds its view from the broker rather than the journal.
+  # Capture the status directly. `if ! cmd; then rc=$?` reads the NEGATION's
+  # result, not the command's, so every failure reports as 0 - which is how a
+  # killed cycle would have been logged as a clean one.
+  timeout --signal=TERM --kill-after=30 "${VETOED_CYCLE_TIMEOUT:-300}"     python -m agent.loop $PASS
+  rc=$?
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+    echo "::warning::cycle ${n} exceeded ${VETOED_CYCLE_TIMEOUT:-300}s and was killed"
+  elif [ "$rc" -ne 0 ]; then
+    echo "::warning::cycle ${n} exited ${rc}"
+  fi
 
   bash scripts/commit_journal.sh || true
 
