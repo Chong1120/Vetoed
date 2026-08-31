@@ -763,6 +763,19 @@ function orderBadge(o) {
 
    So: filter by what became of the decision, and page through the rest. */
 
+/* The provider's raw error body is unreadable and tells a viewer nothing.
+   Say what happened instead. A failed call is not a failed cycle: the agent
+   carries on deterministically rather than guessing. Full text stays journalled. */
+function llmErrLine(raw, action) {
+  if (!raw) return "";
+  const code = String(raw).match(/(?:^|[^0-9])([45][0-9]{2})(?![0-9])/);
+  const what = code ? `provider call failed (HTTP ${code[1]})` : "provider call failed";
+  const then = action && action !== "no_trade"
+    ? "fell back to deterministic selection"
+    : "no trade taken";
+  return `${what} — ${then}`;
+}
+
 const DEC = { filter: "all", page: 0, size: 12, rows: [], runs: [], orders: [], stamp: "" };
 
 const DEC_FILTERS = [
