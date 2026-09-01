@@ -54,16 +54,44 @@ fi
 
 git commit -q -m "Journal: cycle $(date -u +%Y-%m-%dT%H:%MZ)"
 
+# A hard ceiling as well as the prompt guard. A push that cannot finish in
+# 45 seconds is not going to.
+if timeout 45 git push --quiet; then
+  echo "journal pushed"
+  exit 0
+fi
+
+# REJECTED. Someone else moved main - another cycle, a Pages deploy, a human.
+#
+# Rebasing was the wrong tool. trades.db is binary, so a rebase over any
+# commit that also touched it conflicts, cannot auto-merge, and the cycle's
+# journal is simply lost. That happened for real: pushes to this repository
+# while a session was live silently dropped every subsequent cycle's record
+# while the agent went on trading perfectly.
+#
+# The agent is authoritative for its own journal - it rebuilt that state from
+# the broker moments ago - so take everyone else's work, then lay this
+# cycle's journal on top. No merge, nothing to conflict.
+echo "push rejected - rebuilding on top of main"
+KEEP="$(mktemp -d)"
+cp journal/trades.db "$KEEP/" 2>/dev/null || true
+cp journal/data.json "$KEEP/" 2>/dev/null || true
+
 for attempt in 1 2 3; do
-  # A hard ceiling as well as the prompt guard. A push that cannot finish in
-  # 45 seconds is not going to, and the next cycle reconciles from the broker
-  # regardless - losing one journal push costs far less than a stalled session.
-  if timeout 45 git push --quiet; then
-    echo "journal pushed"
+  timeout 45 git fetch --quiet origin main || true
+  git reset --hard --quiet origin/main
+  cp "$KEEP/trades.db" journal/trades.db 2>/dev/null || true
+  cp "$KEEP/data.json" journal/data.json 2>/dev/null || true
+  git add journal/trades.db journal/data.json
+  if git diff --cached --quiet; then
+    echo "journal already current on main"
     exit 0
   fi
-  echo "push rejected, rebasing (attempt ${attempt})"
-  timeout 45 git pull --rebase --quiet || true
+  git commit -q -m "Journal: cycle $(date -u +%Y-%m-%dT%H:%MZ)"
+  if timeout 45 git push --quiet; then
+    echo "journal pushed (attempt ${attempt})"
+    exit 0
+  fi
 done
 
 echo "::warning::could not push the journal after 3 attempts"
