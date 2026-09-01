@@ -94,7 +94,7 @@ const panels = [
   ["vols",      () => ctx.vols(data.runs)],
   ["positions", () => ctx.positions(data.positions, held, null, spots)],
   ["closed",    () => ctx.closedPositions(data.closed_positions)],
-  ["decisions", () => ctx.decisions(data.decisions, data.runs, data.orders)],
+  ["decisions", () => ctx.decisions(data.decisions, data.runs, data.orders, data.closed_positions)],
 ];
 
 let failed = false;
@@ -122,7 +122,7 @@ for (const id of ["positions", "decisions", "kpis"]) {
 // which does not attach to a VM context's global object, so reach it by
 // evaluating inside the context rather than through the sandbox.
 const DEC = vm.runInContext("DEC", ctx);
-for (const f of ["all", "traded", "vetoed", "passed", "dry"]) {
+for (const f of ["all", "traded", "exit", "vetoed", "passed", "dry"]) {
   DEC.filter = f;
   try {
     ctx.render();

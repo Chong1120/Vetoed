@@ -130,6 +130,7 @@ MIGRATIONS = [
     "ALTER TABLE orders ADD COLUMN entry_dte INTEGER",
     "ALTER TABLE runs ADD COLUMN context_json TEXT",
     "ALTER TABLE orders ADD COLUMN exit_reason TEXT",
+    "ALTER TABLE runs ADD COLUMN shortlist_json TEXT",
 ]
 
 
@@ -147,23 +148,42 @@ def init(path: str = DB_PATH) -> None:
 # writes
 # --------------------------------------------------------------------------- #
 
+# Only what is needed to show the ranking. The full candidate carries 26
+# fields; storing all of them for every cycle would bloat a journal that is
+# committed to git on every run.
+_SHORTLIST_FIELDS = ("underlying", "kind", "short_strike", "long_strike",
+                     "dte", "vrp_edge", "pop", "credit", "score")
+
+
+def _trim(cands: list[dict] | None) -> list[dict]:
+    return [{k: c.get(k) for k in _SHORTLIST_FIELDS} for c in (cands or [])]
+
+
 def start_run(market_open: bool, feed: str | None, equity: float | None,
               day_pnl: float | None, halted: bool, candidates: int,
               note: str = "", context: dict | None = None,
+              shortlist: list[dict] | None = None,
               path: str = DB_PATH) -> int:
     """Open a run row.
 
     `context` is the screener's own output - per-underlying spot, IV, realised
     vol and contracts examined. Stored so the dashboard can show WHY a cycle
     produced the candidates it did, including the cycles that produced none.
+
+    `shortlist` is every candidate the model was offered, not just the one it
+    took. Without it the journal records a choice with nothing to compare it
+    against, and "picks one item from a list it did not write" is a claim the
+    page cannot show.
     """
     with connect(path) as c:
         cur = c.execute(
             "INSERT INTO runs (ts, market_open, feed, equity, day_pnl, halted,"
-            " candidates, note, context_json) VALUES (?,?,?,?,?,?,?,?,?)",
+            " candidates, note, context_json, shortlist_json)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
             (now(), int(market_open), feed, equity, day_pnl, int(halted),
              candidates, note,
-             json.dumps(context.get("underlyings", {})) if context else None))
+             json.dumps(context.get("underlyings", {})) if context else None,
+             json.dumps(_trim(shortlist)) if shortlist else None))
         return int(cur.lastrowid)
 
 

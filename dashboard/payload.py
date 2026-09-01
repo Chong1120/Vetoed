@@ -226,7 +226,8 @@ def orders(limit: int = 100) -> list[dict]:
 
 def runs(limit: int = 50) -> list[dict]:
     journal.init()
-    return [_decode(r, "context_json") for r in journal.recent_runs(limit)]
+    return [_decode(r, "context_json", "shortlist_json")
+            for r in journal.recent_runs(limit)]
 
 
 # --------------------------------------------------------------------------- #

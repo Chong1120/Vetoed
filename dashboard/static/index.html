@@ -1047,12 +1047,14 @@ const DEC = { filter: "all", page: 0, size: 12, rows: [], runs: [], orders: [], 
 const DEC_FILTERS = [
   ["all",    "All"],
   ["traded", "Traded"],
+  ["exit",   "Exits"],
   ["vetoed", "Vetoed by risk"],
   ["passed", "Passed"],
   ["dry",    "Dry run"],
 ];
 
 function decClass(d, orderFor) {
+  if (d._exit) return "exit";
   const o = orderFor.get(d.id);
   const st = String((o && o.status) || "").toLowerCase();
   const outcome = String(d.outcome || "").toLowerCase();
@@ -1062,8 +1064,50 @@ function decClass(d, orderFor) {
   return "passed";
 }
 
-function decisions(rows, runs, orders) {
+/* An EXIT is a decision too, and the log did not have one.
+   The agent closed a position today on its take-profit rule and the decision
+   table showed nothing - the most consequential thing it did all day was
+   visible only in a cycle note. Closes are folded into the same timeline, so
+   the log reads as what the agent DID rather than only what it opened. */
+/* What else was on the table. The log recorded the choice and nothing to
+   compare it against, so "picks one item from a list it did not write" was a
+   claim the page could not show. Older cycles have no shortlist stored and
+   simply render nothing - never a fabricated one. */
+function shortlistNote(run, chosen) {
+  const list = run && run.shortlist_json;
+  if (!Array.isArray(list) || list.length < 2) return "";
+  const same = (a) => a && chosen
+    && a.underlying === chosen.underlying
+    && Number(a.short_strike) === Number(chosen.short_strike)
+    && Number(a.long_strike) === Number(chosen.long_strike);
+  const others = list.filter(a => !same(a));
+  return `<details style="margin-top:7px">
+    <summary class="sub dim" style="cursor:pointer">
+      chose 1 of ${list.length} &mdash; show the ${others.length} it passed over
+    </summary>
+    <div class="sub" style="margin-top:6px; display:flex; flex-direction:column; gap:3px">
+      ${others.map(a => `<div class="mono dim">
+        ${esc(a.underlying)} ${esc((a.kind || "").replace("_", " "))}
+        ${a.short_strike}/${a.long_strike} &middot; ${a.dte}DTE &middot;
+        edge ${a.vrp_edge == null ? NB : money(a.vrp_edge)}
+      </div>`).join("")}
+    </div></details>`;
+}
+
+function exitEvents(closed) {
+  return (closed || []).filter(c => c.closed_ts).map(c => ({
+    id: "exit-" + c.closed_ts + "-" + (c.short_symbol || ""),
+    ts: c.closed_ts,
+    _exit: c,
+  }));
+}
+
+function decisions(rows, runs, orders, closed) {
   if (rows) {
+    // Merge closes into the same list, newest first, so one timeline shows
+    // opening and closing rather than two places to look.
+    rows = rows.concat(exitEvents(closed))
+               .sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
     // Auto-refresh runs every 30 seconds. Resetting the page on every call
     // meant a reader who clicked "next" was thrown back to page one before
     // they finished reading it - which is indistinguishable from pagination
@@ -1088,7 +1132,7 @@ function render() {
     return;
   }
 
-  const counts = { all: DEC.rows.length, traded: 0, vetoed: 0, passed: 0, dry: 0 };
+  const counts = { all: DEC.rows.length, traded: 0, exit: 0, vetoed: 0, passed: 0, dry: 0 };
   for (const d of DEC.rows) counts[decClass(d, orderFor)]++;
 
   const shown = DEC.filter === "all"
@@ -1105,6 +1149,27 @@ function render() {
        ${label}<span class="n">${counts[k] || 0}</span></button>`).join("");
 
   const body = slice.map(d => {
+    if (d._exit) {
+      const x = d._exit, pnl = Number(x.realised_pnl);
+      const kS = strikeOf(x.short_symbol), kL = strikeOf(x.long_symbol);
+      const isPut = /put/i.test(x.kind || "");
+      return `<tr>
+        <td class="mono dim">${esc(shortTs(x.ts || x.closed_ts))}</td>
+        <td><div class="mono">${esc(x.underlying)} ${esc((x.kind || "").replace("_", " "))}</div>
+          <div class="sub">${kS == null ? NB : kS}/${kL == null ? NB : kL}
+            ${isPut ? "PUT" : "CALL"} &middot; ${x.contracts} contracts</div></td>
+        <td class="mono ${cls(pnl)}" style="font-weight:600">${signed(pnl)}</td>
+        <td class="mono">close_spread</td>
+        <td class="mono dim">${NB}</td>
+        <td><span class="pill ${pnl >= 0 ? "on" : "alert"}">position closed</span></td>
+        <td class="rationale">Bought the spread back and booked the result.
+          ${x.exit_reason ? `<div class="note">${esc(x.exit_reason)}</div>` : ""}
+          <div class="note">kept ${x.kept_pct == null ? NB : x.kept_pct.toFixed(0) + "%"}
+            of ${money(x.credit_total)} collected &middot;
+            ${x.return_on_risk == null ? NB : x.return_on_risk.toFixed(1) + "%"}
+            on ${money(x.max_loss_total)} risked</div>
+        </td></tr>`;
+    }
     const c = d.candidate_json || {};
     const vetoes = d.risk_vetoes || [];
     const reasons = d.risk_reasons || [];
@@ -1140,6 +1205,7 @@ function render() {
       <td class="mono">${d.llm_confidence == null ? NB : Number(d.llm_confidence).toFixed(2)}</td>
       <td>${gate}${resolved}${orderBadge(orderFor.get(d.id))}</td>
       <td class="rationale">${esc(d.llm_rationale)}
+        ${shortlistNote(runById.get(d.run_id), c)}
         ${vetoes.map(v => `<div class="veto">${esc(v)}</div>`).join("")}
         ${d.risk_approved ? reasons.slice(-1).map(r => `<div class="note">${esc(r)}</div>`).join("") : ""}
         ${d.llm_error ? `<div class="note">${esc(llmErrLine(d.llm_error, d.llm_action))}</div>` : ""}
@@ -1233,7 +1299,7 @@ async function refresh() {
       if (v && v.spot != null) spots[sym] = v.spot;
     }
     vols(r); positions(p, held, live, spots);
-    closedPositions(cl); decisions(d, r, o);
+    closedPositions(cl); decisions(d, r, o, cl);
   } catch (err) { console.error("Refresh error:", err); }
 }
 
