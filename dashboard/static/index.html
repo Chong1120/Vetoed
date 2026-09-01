@@ -893,10 +893,10 @@ function positions(rows, broker, live, spots) {
 
     return `<tr>
       <td>
-        <div class="mono" style="font-weight:600">${esc(r.underlying)}</div>
+        <div class="mono" style="font-weight:600">${esc(r.underlying)} ${stPill}</div>
         <div class="sub dim">${esc((r.kind || "").replace("_", " "))}</div>
-        <div class="sub" style="color:var(--muted)">wins if ${esc(r.underlying)}
-          stays ${isPut ? "above" : "below"} ${k == null ? NB : "$" + k.toFixed(2)}</div>
+        <div class="sub" style="color:var(--muted)">wins if it stays
+          ${isPut ? "above" : "below"} ${k == null ? NB : "$" + k.toFixed(2)}</div>
       </td>
       <td class="mono">
         <div><span style="color:var(--loss)">SELL</span>
@@ -904,15 +904,15 @@ function positions(rows, broker, live, spots) {
         <div class="sub"><span style="color:var(--profit)">BUY</span>
           <span class="dim">${kLong == null ? NB : "$" + kLong.toFixed(2)}
           ${isPut ? "PUT" : "CALL"}</span></div>
+        <div class="sub dim">&times;${qty} contracts</div>
       </td>
-      <td class="mono">${spot == null ? NB : "$" + spot.toFixed(2)}</td>
       <td class="mono ${roomCls}">
         ${roomPct == null ? NB : (roomPct > 0 ? "+" : "") + roomPct.toFixed(1) + "%"}
         <div class="sub dim">${room == null ? "" : "$" + Math.abs(room).toFixed(2) + " away"}</div>
+        <div class="sub dim">spot ${spot == null ? NB : "$" + spot.toFixed(2)}</div>
       </td>
       <td class="mono">${dte == null ? NB : dte + "d"}
         <div class="sub dim">${expiryLabel(r.short_symbol) || ""}</div></td>
-      <td class="mono">${qty}</td>
       <td class="mono pos">${money(collected)}
         <div class="sub dim">take profit ${money(tp)}</div></td>
       <td class="mono neg">${money(maxLoss)}
@@ -922,7 +922,6 @@ function positions(rows, broker, live, spots) {
                       : signed(pnl)}
         ${exitBar(pnl, tp, sl)}</td>
       <td>${payoffSvg(k, kLong, credit, qty, spot, isPut)}</td>
-      <td>${stPill}</td>
     </tr>`;
   }).join("");
 
@@ -943,9 +942,9 @@ function positions(rows, broker, live, spots) {
 
   $("positions").innerHTML = `
     <div class="tscroll"><table><thead><tr>
-      <th>Underlying</th><th>Strikes</th><th>Spot</th><th>Room</th>
-      <th>Expires</th><th>Qty</th><th>Collected</th><th>Max loss</th>
-      <th>Unrealised</th><th>Payoff at expiry</th><th>Status</th>
+      <th>Position</th><th>Strikes</th><th>Room to strike</th>
+      <th>Expires</th><th>Collected</th><th>Max loss</th>
+      <th>Unrealised</th><th>Payoff at expiry</th>
     </tr></thead><tbody>${body}</tbody></table></div>
 
     <div class="meta-row">
