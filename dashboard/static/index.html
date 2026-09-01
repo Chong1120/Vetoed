@@ -39,6 +39,21 @@
   .pos { color: var(--profit); } .neg { color: var(--loss); }
   .warn { color: var(--warn); }
 
+  /* The agent's own note on a position. Set as something a person wrote -
+     indented, quiet, in its own voice - rather than another data cell. */
+  .agent-note {
+    margin: 10px 0 2px; padding: 10px 14px; border-left: 2px solid var(--accent-dk);
+    background: var(--raised); border-radius: 0 6px 6px 0;
+    font-size: 12.5px; line-height: 1.6; color: var(--text-dim); max-width: 62ch;
+  }
+  .agent-note .who {
+    display: block; font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--accent);
+    margin-bottom: 5px;
+  }
+  .agent-note.pending { color: var(--muted); font-style: italic; }
+  .agent-note.failed { border-left-color: var(--line); color: var(--muted); }
+
   /* Cumulative selectivity. The funnel above it answers "what happened this
      cycle"; this answers "how selective is this thing", which is the claim
      the whole design rests on. */
@@ -865,7 +880,10 @@ function closedPositions(rows) {
       <td>${r.exit_reason
             ? `<span class="pill ${/take profit/i.test(r.exit_reason) ? "on" : "warn"}">${esc(r.exit_reason)}</span>`
             : `<span class="dim">not recorded</span>`}</td>
-    </tr>`;
+    </tr>
+    ${noteSlot(r.short_symbol)
+      ? `<tr><td colspan="9" style="padding-top:0">${noteSlot(r.short_symbol)}</td></tr>`
+      : ""}`;
   }).join("") + `</tbody></table></div>
     <div class="meta-row">
       <span class="sub"><strong>${rows.length}</strong> closed
@@ -873,6 +891,56 @@ function closedPositions(rows) {
       <span class="sub">realised total
         <strong class="${cls(total)}">${signed(total)}</strong></span>
     </div>`;
+  fillNotes(el);
+}
+
+/* THE AGENT'S NOTE.
+   Every fact needed to understand a position was recorded and scattered
+   across three panels - the entry reasoning in the decision log, the exit
+   reason in the closed table, the numbers in a fourth place. A reader had to
+   assemble them to answer the simplest question: why this trade, and why did
+   it end.
+   So the agent says it, in its own words. The browser sends an identifier and
+   nothing else; the server finds that position in the journal and writes the
+   entire prompt from recorded values, so nothing here can put words in the
+   model's mouth. If it is unavailable the row keeps every number it already
+   had - the note is an addition, never a dependency. */
+const NOTE_API = "https://vetoed-three.vercel.app/api/explain";
+const NOTES = new Map();          // leg -> text, so a redraw never re-asks
+
+function noteSlot(leg) {
+  if (!leg || !NOTE_API) return "";
+  const cached = NOTES.get(leg);
+  if (cached === undefined) {
+    return `<div class="agent-note pending" data-note="${esc(leg)}">
+      <span class="who">the agent</span>writing…</div>`;
+  }
+  if (cached === null) return "";                       // asked, unavailable
+  return `<div class="agent-note"><span class="who">the agent</span>${esc(cached)}</div>`;
+}
+
+// Fetch one note at a time. Nothing here blocks the page: the row is already
+// complete without it.
+async function fillNotes(root) {
+  const slots = Array.from(root.querySelectorAll("[data-note]"));
+  for (const el of slots) {
+    const leg = el.dataset.note;
+    if (NOTES.has(leg)) continue;
+    try {
+      const r = await fetch(NOTE_API + "?leg=" + encodeURIComponent(leg));
+      const j = r.ok ? await r.json() : null;
+      NOTES.set(leg, (j && j.explanation) ? j.explanation : null);
+    } catch (_) {
+      NOTES.set(leg, null);
+    }
+    const text = NOTES.get(leg);
+    if (text) {
+      el.classList.remove("pending");
+      el.innerHTML = `<span class="who">the agent</span>${esc(text)}`;
+    } else {
+      el.remove();
+    }
+  }
 }
 
 function positions(rows, broker, live, spots) {
@@ -970,7 +1038,10 @@ function positions(rows, broker, live, spots) {
                       : signed(pnl)}
         ${exitBar(pnl, tp, sl)}</td>
       <td>${payoffSvg(k, kLong, credit, qty, spot, isPut)}</td>
-    </tr>`;
+    </tr>
+    ${noteSlot(r.short_symbol)
+      ? `<tr><td colspan="8" style="padding-top:0">${noteSlot(r.short_symbol)}</td></tr>`
+      : ""}`;
   }).join("");
 
   const closedNote = gone > 0
@@ -988,7 +1059,8 @@ function positions(rows, broker, live, spots) {
        </div>`
     : "";
 
-  $("positions").innerHTML = `
+  const _p = $("positions");
+  _p.innerHTML = `
     <div class="tscroll"><table><thead><tr>
       <th>Position</th><th>Strikes</th><th>Room to strike</th>
       <th>Expires</th><th>Collected</th><th>Max loss</th>
@@ -1020,6 +1092,7 @@ function positions(rows, broker, live, spots) {
       </tr>`).join("") + `</tbody></table></div></div>`;
 
   // A real button, so it is obvious it can be pressed and reachable by keyboard.
+  fillNotes(_p);
   const btn = $("legs-btn"), panel = $("legs-panel");
   if (btn && panel) {
     btn.addEventListener("click", () => {
