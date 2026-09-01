@@ -366,6 +366,29 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
                 log("dropped %d candidate(s) already held at the broker"
                     % (before - len(cands)))
 
+        # Drop underlyings that are already at their per-underlying limit.
+        #
+        # Same reasoning as the filter above, one level up. AAPL sat at 2 of a
+        # permitted 2 and kept winning the ranking on edge, so five cycles in a
+        # row chose AAPL, hit CONCENTRATION at the gate, and ended having done
+        # nothing - while SPY, QQQ and IWM candidates sat in the same shortlist
+        # untaken. The veto was right every time; offering the candidate at all
+        # was not.
+        #
+        # Nothing is weakened: the gate still counts and still refuses. This
+        # stops the model being handed a choice it cannot act on.
+        at_limit = {u for u in {r.get("underlying") for r in open_rows}
+                    if sum(1 for r in open_rows if r.get("underlying") == u)
+                    >= risk.MAX_POSITIONS_PER_UNDERLYING}
+        if at_limit:
+            before = len(cands)
+            cands = [c for c in cands if c["underlying"] not in at_limit]
+            if len(cands) != before:
+                log("dropped %d candidate(s) on %s - already at the %d-position "
+                    "limit for that underlying"
+                    % (before - len(cands), ", ".join(sorted(at_limit)),
+                       risk.MAX_POSITIONS_PER_UNDERLYING))
+
         run_id = journal.start_run(
             is_open, ctx.get("feed"), equity, acct_state.day_pnl,
             acct_state.halted, len(cands),
