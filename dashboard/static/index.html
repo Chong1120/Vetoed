@@ -429,6 +429,12 @@ function kpis(s, orders, broker, live) {
 
   // Equity moves with the whole account; this is the open risk marking to
   // market right now, which is the figure a reader is actually looking for.
+  // One equity figure feeds both cells. When a live source answers, the
+  // journal's older reading is not mixed in.
+  const equityNow = (live && live.equity != null) ? Number(live.equity) : latest;
+  const liveChg = (start != null && equityNow != null) ? equityNow - start : chg;
+  const liveChgPct = (start && liveChg != null) ? liveChg / start : chgPct;
+
   const unreal = (broker && broker.length)
     ? broker.reduce((a, b) => a + (Number(b.unrealised) || 0), 0)
     : null;
@@ -446,8 +452,12 @@ function kpis(s, orders, broker, live) {
      (live && live.cash != null && start)
        ? signed(live.cash - start) + " premium received, not yet earned"
        : "premium is received up front"],
-    ["Total P&amp;L", chg == null ? NB : signed(chg), cls(chg),
-     chgPct == null ? "" : pct(chgPct) + " on starting equity"],
+    // Derive this from whatever Equity is showing. It used to come from the
+    // journal's last snapshot while Equity read live, so the two sat side by
+    // side disagreeing by over a thousand dollars - the page reporting a loss
+    // beside an account that was up.
+    ["Total P&amp;L", liveChg == null ? NB : signed(liveChg), cls(liveChg),
+     liveChgPct == null ? "" : pct(liveChgPct) + " on starting equity"],
     ["Realised P&amp;L", signed(s.realised_pnl || 0), cls(s.realised_pnl),
      closed.length + " closed trade" + (closed.length === 1 ? "" : "s")],
     ["Win rate", wr == null ? NB : wr.toFixed(0) + "%", wr == null ? "" : (wr >= 80 ? "pos" : "neg"),

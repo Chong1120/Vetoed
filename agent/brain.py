@@ -523,7 +523,13 @@ def call_featherless(prompt: str, api_key: str, model: str | None = None,
 
     choices = payload.get("choices") or []
     if not choices:
-        raise ValueError("no choices in response: %s" % str(payload)[:300])
+        # Name the model. The provider answers a bad model id with a generic
+        # "request was rejected as invalid", which says nothing about the one
+        # setting most likely to be wrong - and the model can differ between a
+        # laptop and CI, where it comes from a repository variable. A failure
+        # that does not name it sends you looking at the prompt instead.
+        raise ValueError("no choices for model %r: %s"
+                         % (FEATHERLESS_MODEL, str(payload)[:280]))
     return (choices[0].get("message") or {}).get("content") or ""
 
 
