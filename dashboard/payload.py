@@ -64,6 +64,47 @@ def equity() -> list[dict]:
     return journal.equity_curve()
 
 
+def selectivity() -> dict:
+    """How much of what it saw did it actually take.
+
+    The funnel panel reports one cycle. That answers "what happened just now"
+    and not "how selective is this thing", which is the claim the whole design
+    rests on - and the journal has had the answer all along. Screening 265
+    candidates to send 3 orders is the argument; a single cycle showing 8 and 1
+    is an anecdote.
+
+    Everything here is counted, never estimated.
+    """
+    journal.init()
+    import sqlite3
+    con = sqlite3.connect(journal.DB_PATH)
+
+    cycles, screened = con.execute(
+        "SELECT COUNT(*), COALESCE(SUM(candidates), 0) FROM runs").fetchone()
+    decisions = con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
+    vetoed = con.execute(
+        "SELECT COUNT(*) FROM decisions WHERE outcome = 'vetoed'").fetchone()[0]
+    passed = con.execute(
+        "SELECT COUNT(*) FROM decisions WHERE outcome IN "
+        "('no trade', 'no candidates')").fetchone()[0]
+    # An order only counts as taken if it was actually sent to the broker -
+    # a dry run, an analysis pass and one that never arrived are all not trades.
+    placeholders = ",".join("?" for _ in journal.DEAD_STATUSES)
+    sent = con.execute(
+        "SELECT COUNT(*) FROM orders WHERE LOWER(COALESCE(status,'')) "
+        "NOT IN (%s)" % placeholders, journal.DEAD_STATUSES).fetchone()[0]
+
+    return {
+        "cycles": cycles,
+        "screened": screened,
+        "decisions": decisions,
+        "vetoed": vetoed,
+        "passed": passed,
+        "sent": sent,
+        "taken_pct": (100.0 * sent / screened) if screened else None,
+    }
+
+
 def broker_positions() -> list[dict]:
     """What Alpaca actually holds, as of the last cycle that could reach it.
 

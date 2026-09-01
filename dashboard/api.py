@@ -53,6 +53,12 @@ def positions() -> JSONResponse:
     return JSONResponse(payload.positions())
 
 
+@app.get("/api/selectivity")
+def selectivity() -> JSONResponse:
+    """Cumulative funnel - how much of what it saw did it take."""
+    return JSONResponse(payload.selectivity())
+
+
 @app.get("/api/broker_positions")
 def broker_positions() -> JSONResponse:
     """What Alpaca holds, not what we believe it holds."""

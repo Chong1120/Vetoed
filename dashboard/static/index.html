@@ -39,6 +39,42 @@
   .pos { color: var(--profit); } .neg { color: var(--loss); }
   .warn { color: var(--warn); }
 
+  /* Cumulative selectivity. The funnel above it answers "what happened this
+     cycle"; this answers "how selective is this thing", which is the claim
+     the whole design rests on. */
+  .selectivity {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 22px;
+    padding: 15px 17px; border-top: 1px solid var(--line);
+    background: var(--raised);
+  }
+  .selectivity .s-item { display: flex; align-items: baseline; gap: 7px; }
+  .selectivity .s-n {
+    font-family: var(--mono); font-size: 16px; font-weight: 600; color: var(--text);
+  }
+  .selectivity .s-k { font-size: 11px; color: var(--muted); }
+  .selectivity .s-head {
+    width: 100%; font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); font-family: var(--mono); font-weight: 600;
+  }
+  .selectivity .s-punch {
+    width: 100%; font-size: 12.5px; color: var(--text-dim); padding-top: 3px;
+  }
+  .selectivity .s-punch strong { color: var(--accent); font-weight: 600; }
+
+  /* Where a position sits between its stop and its take-profit. The numbers
+     were already on the row; this is where you ARE between them. */
+  .exit-bar {
+    position: relative; height: 5px; border-radius: 3px; margin-top: 6px;
+    background: linear-gradient(90deg, var(--loss-bg), var(--line), var(--profit-bg));
+  }
+  .exit-bar .mark {
+    position: absolute; top: -3px; width: 2px; height: 11px; border-radius: 1px;
+    background: var(--text);
+  }
+  .exit-bar .zero {
+    position: absolute; top: -1px; width: 1px; height: 7px; background: var(--muted);
+  }
+
   /* Controls and meta rows sit inside a .scroll container that has no padding,
      because the tables inside it are meant to run edge to edge. Anything that
      is NOT a table needs its own breathing room, or it ends up flush against
@@ -485,7 +521,27 @@ function chart(rows) {
 }
 
 /* ------------------------------------------------------------------ */
-function funnel(runs, decisions, orders) {
+/* SELECTIVITY, cumulative.
+   Screening 265 candidates to send 3 orders is an argument. One cycle showing
+   8 and 1 is an anecdote. Every number here is counted from the journal. */
+function selectivity(sel) {
+  if (!sel || !sel.cycles) return "";
+  const pct = sel.taken_pct == null ? null : sel.taken_pct;
+  const item = (n, k) => `<div class="s-item"><span class="s-n">${n}</span>
+    <span class="s-k">${k}</span></div>`;
+  return `<div class="selectivity">
+    <div class="s-head">Since inception</div>
+    ${item(sel.cycles, "cycles")}
+    ${item(sel.screened, "candidates screened")}
+    ${item(sel.vetoed, "refused by risk gates")}
+    ${item(sel.sent, "orders sent")}
+    <div class="s-punch">It took
+      <strong>${pct == null ? NB : pct.toFixed(2) + "%"}</strong>
+      of what it looked at.</div>
+  </div>`;
+}
+
+function funnel(runs, decisions, orders, sel) {
   const run = runs[0];
   if (!run) { $("funnel").innerHTML = `<div class="empty">No cycles run yet.</div>`; return; }
 
@@ -516,7 +572,7 @@ function funnel(runs, decisions, orders) {
       <div class="fn-val">${val}</div>
       <div class="fn-bar"><div class="fn-fill ${kind}"
         style="width:${Math.max((val / max) * 100, val > 0 ? 4 : 0)}%"></div></div>
-    </div>`).join("");
+    </div>`).join("") + selectivity(sel);
 }
 
 /* ------------------------------------------------------------------ */
@@ -592,6 +648,64 @@ function expiryLabel(sym) {
 function strikeOf(sym) {
   const m = String(sym || "").match(/[CP](\d{8})$/);
   return m ? +m[1] / 1000 : null;
+}
+
+/* PAYOFF AT EXPIRY, drawn per spread.
+   The defining property of a credit spread is that both tails are FLAT - the
+   loss stops. Every other panel asserts that in words; this is the one place
+   you can see it. Profit is flat above (or below) the short strike, ramps
+   across the band, and floors at max loss. The marker is spot now.
+
+   Drawn from the position's own numbers, not modelled: strikes, credit,
+   contracts. Nothing here is a forecast. */
+function payoffSvg(kShort, kLong, credit, qty, spot, isPut) {
+  if (kShort == null || kLong == null) return "";
+  const W = 132, H = 40, PAD = 3;
+  const maxProfit = credit * 100 * qty;
+  const width = Math.abs(kShort - kLong);
+  const maxLoss = width * 100 * qty - maxProfit;
+  if (!(maxProfit > 0) || !(maxLoss > 0)) return "";
+
+  // Show a band wide enough that both flats are visible either side.
+  const lo = Math.min(kShort, kLong) - width * 1.2;
+  const hi = Math.max(kShort, kLong) + width * 1.2;
+  const x = (k) => PAD + ((k - lo) / (hi - lo)) * (W - 2 * PAD);
+  const y = (v) => {
+    const t = (v + maxLoss) / (maxProfit + maxLoss);   // 0 = max loss, 1 = max profit
+    return H - PAD - t * (H - 2 * PAD);
+  };
+
+  // A put spread profits BELOW nothing and loses as price falls; a call
+  // spread is the mirror. Walk the four corners in price order either way.
+  const pts = isPut
+    ? [[lo, -maxLoss], [kLong, -maxLoss], [kShort, maxProfit], [hi, maxProfit]]
+    : [[lo, maxProfit], [kShort, maxProfit], [kLong, -maxLoss], [hi, -maxLoss]];
+  const d = pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1)).join(" ");
+  const zeroY = y(0).toFixed(1);
+  const spotX = (spot != null && spot > lo && spot < hi) ? x(spot).toFixed(1) : null;
+
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
+      role="img" aria-label="payoff at expiry, loss is capped">
+    <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}"
+          stroke="var(--line)" stroke-width="1"/>
+    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6"
+          stroke-linejoin="round"/>
+    ${spotX ? `<line x1="${spotX}" y1="0" x2="${spotX}" y2="${H}"
+          stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2 2"/>` : ""}
+  </svg>`;
+}
+
+/* Where the position sits between its stop and its take-profit. Both numbers
+   were already on the row; this is the one thing they did not say - where you
+   ARE between them. Matters most before an exit has ever fired. */
+function exitBar(pnl, takeProfit, stopLoss) {
+  if (pnl == null || !(takeProfit > 0) || !(stopLoss < 0)) return "";
+  const t = Math.max(0, Math.min(1, (pnl - stopLoss) / (takeProfit - stopLoss)));
+  const zero = (0 - stopLoss) / (takeProfit - stopLoss);
+  return `<div class="exit-bar">
+    <div class="zero" style="left:${(zero * 100).toFixed(1)}%"></div>
+    <div class="mark" style="left:${(t * 100).toFixed(1)}%"></div>
+  </div>`;
 }
 
 function positions(rows, broker, live, spots) {
@@ -676,7 +790,9 @@ function positions(rows, broker, live, spots) {
       <td class="mono neg">${money(maxLoss)}
         <div class="sub dim">stop ${money(sl)}</div></td>
       <td class="mono ${pnl == null ? "dim" : cls(pnl)}">
-        ${pnl == null ? "not yet at broker" : signed(pnl)}</td>
+        ${pnl == null ? "not yet at broker" : signed(pnl)}
+        ${exitBar(pnl, tp, sl)}</td>
+      <td>${payoffSvg(k, kLong, credit, qty, spot, isPut)}</td>
       <td>${stPill}</td>
     </tr>`;
   }).join("");
@@ -693,7 +809,7 @@ function positions(rows, broker, live, spots) {
     <div class="tscroll"><table><thead><tr>
       <th>Underlying</th><th>Strikes</th><th>Spot</th><th>Room</th>
       <th>Expires</th><th>Qty</th><th>Collected</th><th>Max loss</th>
-      <th>Unrealised</th><th>Status</th>
+      <th>Unrealised</th><th>Payoff at expiry</th><th>Status</th>
     </tr></thead><tbody>${body}</tbody></table></div>
 
     <div class="meta-row">
@@ -930,12 +1046,12 @@ function render() {
 /* ------------------------------------------------------------------ */
 async function refresh() {
   try {
-    let s, e, p, d, r, o, bp;
+    let s, e, p, d, r, o, bp, sel;
     if (MODE === "live") {
-      [s, e, p, d, r, o, bp] = await Promise.all([
+      [s, e, p, d, r, o, bp, sel] = await Promise.all([
         get("summary"), get("equity"), get("positions"),
         get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200"),
-        get("broker_positions")]);
+        get("broker_positions"), get("selectivity")]);
     } else {
       await fetchSnapshot();
       if (!SNAP) return;
@@ -946,6 +1062,7 @@ async function refresh() {
       r = SNAP.runs;
       o = SNAP.orders;
       bp = SNAP.broker_positions;
+      sel = SNAP.selectivity;   // absent in older snapshots; renders nothing
     }
 
     // Live view exists only when a local server holds the credentials. The
@@ -967,7 +1084,7 @@ async function refresh() {
       } catch (_) { /* stays null; the snapshot path is always valid */ }
     }
     const held = live ? live.positions : bp;
-    status(s, r, live); kpis(s, o, held, live); chart(e); funnel(r, d, o);
+    status(s, r, live); kpis(s, o, held, live); chart(e); funnel(r, d, o, sel);
     // Spot prices come from the screening context of the most recent cycle
     // that captured one - the same source the volatility cards use.
     const ctxRun = (r || []).find(x => x.context_json && Object.keys(x.context_json).length);

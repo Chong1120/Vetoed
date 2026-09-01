@@ -47,6 +47,7 @@ def build() -> dict:
         "equity": payload.equity(),
         "positions": payload.positions(),
         "broker_positions": payload.broker_positions(),
+        "selectivity": payload.selectivity(),
         "decisions": payload.decisions(60),
         "runs": payload.runs(30),
         "orders": payload.orders(200),
