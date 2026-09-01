@@ -213,6 +213,10 @@
 
   /* ---------------- tables ---------------- */
   .scroll { overflow-x: auto; }
+  /* Only the TABLE scrolls. When the whole panel was the scroll container,
+     anything centred in it - the pager - centred inside the scrolled table's
+     width instead of the visible panel, and drifted off to the right. */
+  .tscroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 12.8px; }
   th {
     text-align: left; font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
@@ -278,12 +282,12 @@
 
   <section class="card">
     <h2>Open positions</h2>
-    <div class="scroll" id="positions"></div>
+    <div id="positions"></div>
   </section>
 
   <section class="card">
     <h2>Decisions <span class="hint">including every one the risk gates vetoed</span></h2>
-    <div class="scroll" id="decisions"></div>
+    <div id="decisions"></div>
     <div class="legend"><b>Edge</b> = the same spread priced at realised volatility
       minus the same spread priced at the market's implied volatility. One model
       both sides, so the only difference is the vol &mdash; the number is the
@@ -664,10 +668,15 @@ function positions(rows, broker, live, spots) {
       <td>
         <div class="mono" style="font-weight:600">${esc(r.underlying)}</div>
         <div class="sub dim">${esc((r.kind || "").replace("_", " "))}</div>
+        <div class="sub" style="color:var(--muted)">wins if ${esc(r.underlying)}
+          stays ${isPut ? "above" : "below"} ${k == null ? NB : "$" + k.toFixed(2)}</div>
       </td>
       <td class="mono">
-        <div>sold ${k == null ? NB : "$" + k.toFixed(2)}</div>
-        <div class="sub dim">bought $${kLong == null ? NB : kLong.toFixed(2)}</div>
+        <div><span style="color:var(--loss)">SELL</span>
+          ${k == null ? NB : "$" + k.toFixed(2)} ${isPut ? "PUT" : "CALL"}</div>
+        <div class="sub"><span style="color:var(--profit)">BUY</span>
+          <span class="dim">${kLong == null ? NB : "$" + kLong.toFixed(2)}
+          ${isPut ? "PUT" : "CALL"}</span></div>
       </td>
       <td class="mono">${spot == null ? NB : "$" + spot.toFixed(2)}</td>
       <td class="mono ${roomCls}">
@@ -696,11 +705,11 @@ function positions(rows, broker, live, spots) {
     : "";
 
   $("positions").innerHTML = `
-    <table><thead><tr>
+    <div class="tscroll"><table><thead><tr>
       <th>Underlying</th><th>Strikes</th><th>Spot</th><th>Room</th>
       <th>Expires</th><th>Qty</th><th>Collected</th><th>Max loss</th>
       <th>Unrealised</th><th>Status</th>
-    </tr></thead><tbody>${body}</tbody></table>
+    </tr></thead><tbody>${body}</tbody></table></div>
 
     <div class="meta-row">
       <span class="sub">Held at Alpaca &middot; <strong>${broker.length}</strong> leg(s)</span>
@@ -714,7 +723,7 @@ function positions(rows, broker, live, spots) {
     </div>
     ${note}
     <div id="legs-panel" hidden>
-      <table><thead><tr>
+      <div class="tscroll"><table><thead><tr>
         <th>Contract</th><th>Qty</th><th>Avg price</th>
         <th>Last</th><th>Market value</th><th>Unrealised</th>
       </tr></thead><tbody>` + broker.map(b => `<tr>
@@ -724,7 +733,7 @@ function positions(rows, broker, live, spots) {
         <td class="mono">${money(b.current_price)}</td>
         <td class="mono">${money(b.market_value)}</td>
         <td class="mono ${cls(Number(b.unrealised))}">${money(b.unrealised)}</td>
-      </tr>`).join("") + `</tbody></table></div>`;
+      </tr>`).join("") + `</tbody></table></div></div>`;
 
   // A real button, so it is obvious it can be pressed and reachable by keyboard.
   const btn = $("legs-btn"), panel = $("legs-panel");
@@ -905,10 +914,10 @@ function render() {
 
   $("decisions").innerHTML = `
     <div class="toolbar"><div class="tabs">${tabs}</div></div>
-    ${shown.length ? `<table><thead><tr>
+    ${shown.length ? `<div class="tscroll"><table><thead><tr>
         <th>Time (UTC)</th><th>Candidate</th><th>Edge</th><th>Action</th>
         <th>Conf.</th><th>Outcome</th><th>Reasoning</th></tr></thead>
-      <tbody>${body}</tbody></table>
+      <tbody>${body}</tbody></table></div>
       ${pages > 1 ? `<div class="pager">
         <button type="button" data-page="prev" ${DEC.page === 0 ? "disabled" : ""}>&larr; Previous</button>
         <span class="count">Showing <strong>${from}&ndash;${to}</strong> of <strong>${shown.length}</strong>
