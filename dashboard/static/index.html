@@ -789,12 +789,12 @@ function positions(rows, broker, live, spots) {
     : (asOf ? `<span class="dim">as read at ${esc(asOf)} UTC &mdash; Alpaca
         will differ as prices move</span>` : "");
 
-  let total = 0, matched = 0;
+  let total = 0, matched = 0, gone = 0;
   const body = rows.map(r => {
     const shortLeg = legBySym.get(r.short_symbol);
     const longLeg = legBySym.get(r.long_symbol);
     const known = shortLeg && longLeg;
-    if (known) matched += 2;
+    if (known) matched += 2; else if (live) gone += 1;
     const pnl = known ? (Number(shortLeg.unrealised) || 0) + (Number(longLeg.unrealised) || 0)
                       : null;
     if (pnl != null) total += pnl;
@@ -853,13 +853,21 @@ function positions(rows, broker, live, spots) {
       <td class="mono neg">${money(maxLoss)}
         <div class="sub dim">stop ${money(sl)}</div></td>
       <td class="mono ${pnl == null ? "dim" : cls(pnl)}">
-        ${pnl == null ? "not yet at broker" : signed(pnl)}
+        ${pnl == null ? (live ? "closed — no longer held" : "awaiting broker read")
+                      : signed(pnl)}
         ${exitBar(pnl, tp, sl)}</td>
       <td>${payoffSvg(k, kLong, credit, qty, spot, isPut)}</td>
       <td>${stPill}</td>
     </tr>`;
   }).join("");
 
+  const closedNote = gone > 0
+    ? `<div class="meta-row" style="color:var(--muted)">
+         ${gone} spread${gone === 1 ? " is" : "s are"} no longer held at the broker
+         &mdash; closed by an exit rule since this list was written. The decision
+         log records why.
+       </div>`
+    : "";
   const unmatched = broker.length - matched;
   const note = unmatched > 0
     ? `<div class="meta-row" style="color:var(--warn)">
@@ -885,7 +893,7 @@ function positions(rows, broker, live, spots) {
         <span class="chev">&#9656;</span> Show the ${broker.length} contracts Alpaca holds
       </button>
     </div>
-    ${note}
+    ${note}${closedNote}
     <div id="legs-panel" hidden>
       <div class="tscroll"><table><thead><tr>
         <th>Contract</th><th>Qty</th><th>Avg price</th>
