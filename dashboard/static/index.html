@@ -651,48 +651,91 @@ function strikeOf(sym) {
 }
 
 /* PAYOFF AT EXPIRY, drawn per spread.
-   The defining property of a credit spread is that both tails are FLAT - the
-   loss stops. Every other panel asserts that in words; this is the one place
-   you can see it. Profit is flat above (or below) the short strike, ramps
-   across the band, and floors at max loss. The marker is spot now.
 
-   Drawn from the position's own numbers, not modelled: strikes, credit,
-   contracts. Nothing here is a forecast. */
+   The first version was a bare line in a 132x40 box: no axis, no labels, no
+   units. It was unreadable, and a chart nobody can read is worse than no
+   chart - it looks like decoration and invites the reader to distrust the
+   rest of the panel.
+
+   What a reader needs to answer, in order: which way do I win, where does it
+   stop, and where am I now. So: the profit side is filled green and the loss
+   side red, the break-even line is drawn and labelled, both strikes are
+   ticked on the price axis, and "now" marks spot. The flat floor - the whole
+   point of a defined-risk spread - is the thing the eye lands on.
+
+   Every number comes from the position itself: strikes, credit, contracts.
+   Nothing is modelled and nothing is forecast. */
 function payoffSvg(kShort, kLong, credit, qty, spot, isPut) {
   if (kShort == null || kLong == null) return "";
-  const W = 132, H = 40, PAD = 3;
+  const W = 208, H = 74, L = 6, R = 6, T = 8, B = 17;
   const maxProfit = credit * 100 * qty;
   const width = Math.abs(kShort - kLong);
   const maxLoss = width * 100 * qty - maxProfit;
   if (!(maxProfit > 0) || !(maxLoss > 0)) return "";
 
-  // Show a band wide enough that both flats are visible either side.
-  const lo = Math.min(kShort, kLong) - width * 1.2;
-  const hi = Math.max(kShort, kLong) + width * 1.2;
-  const x = (k) => PAD + ((k - lo) / (hi - lo)) * (W - 2 * PAD);
+  // The price axis must always contain spot. Framing it on the strikes alone
+  // put AAPL at $317 outside a $294-$310 window, so "now" silently vanished
+  // on two of three positions - dropping the one question the chart most
+  // needs to answer. Widening also shows AT A GLANCE how far out of the money
+  // the short strike is, which is the reassuring part.
+  let lo = Math.min(kShort, kLong) - width * 1.1;
+  let hi = Math.max(kShort, kLong) + width * 1.1;
+  if (spot != null && isFinite(spot)) {
+    lo = Math.min(lo, spot - width * 0.35);
+    hi = Math.max(hi, spot + width * 0.35);
+  }
+  const x = (k) => L + ((k - lo) / (hi - lo)) * (W - L - R);
   const y = (v) => {
-    const t = (v + maxLoss) / (maxProfit + maxLoss);   // 0 = max loss, 1 = max profit
-    return H - PAD - t * (H - 2 * PAD);
+    const t = (v + maxLoss) / (maxProfit + maxLoss);
+    return (H - B) - t * (H - B - T);
   };
 
-  // A put spread profits BELOW nothing and loses as price falls; a call
-  // spread is the mirror. Walk the four corners in price order either way.
   const pts = isPut
     ? [[lo, -maxLoss], [kLong, -maxLoss], [kShort, maxProfit], [hi, maxProfit]]
     : [[lo, maxProfit], [kShort, maxProfit], [kLong, -maxLoss], [hi, -maxLoss]];
-  const d = pts.map((p, i) => (i ? "L" : "M") + x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1)).join(" ");
-  const zeroY = y(0).toFixed(1);
-  const spotX = (spot != null && spot > lo && spot < hi) ? x(spot).toFixed(1) : null;
+  const path = pts.map((p, i) =>
+    (i ? "L" : "M") + x(p[0]).toFixed(1) + "," + y(p[1]).toFixed(1)).join(" ");
 
-  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
-      role="img" aria-label="payoff at expiry, loss is capped">
-    <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}"
-          stroke="var(--line)" stroke-width="1"/>
-    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6"
+  // Fill between the payoff line and break-even: green where it pays, red
+  // where it costs. Two closed shapes, clipped at the zero line.
+  const z = y(0);
+  const be = isPut ? kLong + (maxLoss / (maxLoss + maxProfit)) * width
+                   : kShort + (maxProfit / (maxLoss + maxProfit)) * width;
+  const bx = x(be);
+  const win = isPut
+    ? `M${bx},${z} L${x(kShort).toFixed(1)},${y(maxProfit).toFixed(1)} L${x(hi).toFixed(1)},${y(maxProfit).toFixed(1)} L${x(hi).toFixed(1)},${z} Z`
+    : `M${x(lo).toFixed(1)},${z} L${x(lo).toFixed(1)},${y(maxProfit).toFixed(1)} L${x(kShort).toFixed(1)},${y(maxProfit).toFixed(1)} L${bx},${z} Z`;
+  const lose = isPut
+    ? `M${x(lo).toFixed(1)},${z} L${x(lo).toFixed(1)},${y(-maxLoss).toFixed(1)} L${x(kLong).toFixed(1)},${y(-maxLoss).toFixed(1)} L${bx},${z} Z`
+    : `M${bx},${z} L${x(kLong).toFixed(1)},${y(-maxLoss).toFixed(1)} L${x(hi).toFixed(1)},${y(-maxLoss).toFixed(1)} L${x(hi).toFixed(1)},${z} Z`;
+
+  const tick = (k) => `<line x1="${x(k).toFixed(1)}" y1="${(H - B).toFixed(1)}"
+      x2="${x(k).toFixed(1)}" y2="${(H - B + 3).toFixed(1)}" stroke="var(--muted)" stroke-width="1"/>
+    <text x="${x(k).toFixed(1)}" y="${H - 5}" font-size="8" fill="var(--muted)"
+      text-anchor="middle" font-family="var(--mono)">${k}</text>`;
+
+  const spotOk = spot != null && spot > lo && spot < hi;
+  const sx = spotOk ? x(spot) : null;
+
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img"
+      aria-label="Payoff at expiry. Maximum loss is capped at ${Math.round(maxLoss)} dollars.">
+    <path d="${win}"  fill="var(--profit)" opacity=".16"/>
+    <path d="${lose}" fill="var(--loss)"   opacity=".16"/>
+    <line x1="${L}" y1="${z.toFixed(1)}" x2="${W - R}" y2="${z.toFixed(1)}"
+          stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 2"/>
+    <text x="${L}" y="${(z - 3).toFixed(1)}" font-size="7.5" fill="var(--muted)"
+          font-family="var(--mono)">break even</text>
+    <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="1.8"
           stroke-linejoin="round"/>
-    ${spotX ? `<line x1="${spotX}" y1="0" x2="${spotX}" y2="${H}"
-          stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2 2"/>` : ""}
-  </svg>`;
+    ${tick(kShort)}${tick(kLong)}
+    ${spotOk ? `<line x1="${sx.toFixed(1)}" y1="${T - 4}" x2="${sx.toFixed(1)}" y2="${H - B}"
+          stroke="var(--text)" stroke-width="1"/>
+      <text x="${sx.toFixed(1)}" y="${T - 6}" font-size="7.5" fill="var(--text)"
+          text-anchor="middle" font-family="var(--mono)">now</text>` : ""}
+  </svg>
+  <div class="sub dim" style="margin-top:2px">
+    profit flat at ${money(maxProfit)} &middot; loss stops at ${money(-maxLoss)}
+  </div>`;
 }
 
 /* Where the position sits between its stop and its take-profit. Both numbers
