@@ -926,14 +926,23 @@ function positions(rows, broker, live, spots) {
     const tp = collected * 0.50, sl = -collected * 2.0;
 
     const st = String(r.status || "").toLowerCase();
-    const stPill = st === "filled" ? `<span class="pill on">filled</span>`
+    // "adopted" describes where the ROW came from, not what the order did.
+    // The order filled - Alpaca filled it - so the badge says filled like
+    // every other one, and the provenance sits quietly underneath. Showing
+    // a different badge made a perfectly good position look like a fault.
+    const stPill = (st === "filled" || st === "adopted")
+        ? `<span class="pill on">filled</span>`
       : st === "uncertain" ? `<span class="pill warn">unconfirmed</span>`
       : `<span class="pill">${esc(r.status)}</span>`;
+    const provenance = st === "adopted"
+      ? `<div class="sub dim" title="This cycle's journal commit was lost. The position was rebuilt from Alpaca's own record of the fill.">rebuilt from broker record</div>`
+      : "";
 
     return `<tr>
       <td>
         <div class="mono" style="font-weight:600">${esc(r.underlying)} ${stPill}</div>
         <div class="sub dim">${esc((r.kind || "").replace("_", " "))}</div>
+        ${provenance}
         <div class="sub" style="color:var(--muted)">wins if it stays
           ${isPut ? "above" : "below"} ${k == null ? NB : "$" + k.toFixed(2)}</div>
       </td>
