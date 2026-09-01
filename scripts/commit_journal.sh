@@ -41,7 +41,11 @@ fi
 
 git config user.name  "vetoed-agent"
 git config user.email "vetoed-agent@users.noreply.github.com"
-git add journal/trades.db
+# Refresh the readable payload before committing. Pages will not rebuild
+# during a session, so this file is how the published page stays current.
+python scripts/export_journal_json.py || echo "::warning::journal export failed"
+
+git add journal/trades.db journal/data.json
 
 if git diff --cached --quiet; then
   echo "journal unchanged"

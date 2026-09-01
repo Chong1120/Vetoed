@@ -27,6 +27,11 @@ journal/*
 # renders and what judges inspect. Checked before committing: it holds no
 # keys, no Alpaca account id, and no order ids. Paper trading only.
 !journal/trades.db
+# The same journal as plain JSON, rewritten every cycle. The published page
+# reads it from raw.githubusercontent.com so it does not have to wait for a
+# Pages rebuild, which during a session never comes. Same content as the .db
+# above, minus the model's raw responses and the broker's raw order objects.
+!journal/data.json
 
 # --- Editor / OS ---
 .vscode/
