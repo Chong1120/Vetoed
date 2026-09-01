@@ -64,6 +64,61 @@ def equity() -> list[dict]:
     return journal.equity_curve()
 
 
+def _reason_from_notes(order: dict) -> str | None:
+    """Recover an exit reason from the cycle note that recorded it."""
+    sym = order.get("short_symbol")
+    closed = order.get("closed_ts")
+    if not sym or not closed:
+        return None
+    for run in journal.recent_runs(200):
+        note = run.get("note") or ""
+        if sym in note:
+            for part in note.split(";"):
+                if part.strip().startswith(sym):
+                    text = part.split(":", 1)[-1].strip()
+                    return text or None
+    return None
+
+
+def closed_positions(limit: int = 50) -> list[dict]:
+    """Trades that are over, with what they returned and why they ended.
+
+    The page had nowhere to show a finished trade. Win rate said "needs closed
+    trades" while one sat in the journal, and the only evidence an exit rule
+    had ever fired was a line buried in a cycle note.
+    """
+    journal.init()
+    rows = [o for o in journal.all_orders(500) if o.get("closed_ts")]
+    out = []
+    for o in rows:
+        credit = float(o.get("credit") or 0) * 100 * int(o.get("contracts") or 0)
+        pnl = o.get("realised_pnl")
+        pnl = float(pnl) if pnl is not None else None
+        risk = float(o.get("max_loss_total") or 0)
+        out.append({
+            "underlying": o.get("underlying"),
+            "kind": o.get("kind"),
+            "short_symbol": o.get("short_symbol"),
+            "long_symbol": o.get("long_symbol"),
+            "contracts": o.get("contracts"),
+            "opened_ts": o.get("ts"),
+            "closed_ts": o.get("closed_ts"),
+            "credit_total": credit,
+            "max_loss_total": risk,
+            "realised_pnl": pnl,
+            # Of the premium collected, how much was actually kept.
+            "kept_pct": (100.0 * pnl / credit) if (pnl is not None and credit) else None,
+            # And against what was risked to earn it.
+            "return_on_risk": (100.0 * pnl / risk) if (pnl is not None and risk) else None,
+            # Rows closed before exit_reason existed still recorded WHY in
+            # the cycle note. Reading it back is recovering the journal's own
+            # words, not inventing a reason after the fact.
+            "exit_reason": o.get("exit_reason") or _reason_from_notes(o),
+        })
+    out.sort(key=lambda r: r["closed_ts"] or "", reverse=True)
+    return out[:limit]
+
+
 def selectivity() -> dict:
     """How much of what it saw did it actually take.
 

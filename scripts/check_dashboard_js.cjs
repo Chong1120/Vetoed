@@ -93,6 +93,7 @@ const panels = [
   ["funnel",    () => ctx.funnel(data.runs, data.decisions, data.orders)],
   ["vols",      () => ctx.vols(data.runs)],
   ["positions", () => ctx.positions(data.positions, held, null, spots)],
+  ["closed",    () => ctx.closedPositions(data.closed_positions)],
   ["decisions", () => ctx.decisions(data.decisions, data.runs, data.orders)],
 ];
 

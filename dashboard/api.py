@@ -53,6 +53,12 @@ def positions() -> JSONResponse:
     return JSONResponse(payload.positions())
 
 
+@app.get("/api/closed_positions")
+def closed_positions() -> JSONResponse:
+    """Finished trades, with what they returned and why they ended."""
+    return JSONResponse(payload.closed_positions())
+
+
 @app.get("/api/selectivity")
 def selectivity() -> JSONResponse:
     """Cumulative funnel - how much of what it saw did it take."""

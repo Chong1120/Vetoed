@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS orders (
     fill_price      REAL,
     raw_json        TEXT,
     closed_ts       TEXT,
-    realised_pnl    REAL
+    realised_pnl    REAL,
+    exit_reason     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -128,6 +129,7 @@ MIGRATIONS = [
     "ALTER TABLE orders ADD COLUMN entry_short_delta REAL",
     "ALTER TABLE orders ADD COLUMN entry_dte INTEGER",
     "ALTER TABLE runs ADD COLUMN context_json TEXT",
+    "ALTER TABLE orders ADD COLUMN exit_reason TEXT",
 ]
 
 
@@ -235,11 +237,18 @@ def set_decision_outcome(decision_id: int, outcome: str,
 
 
 def close_order(alpaca_order_id: str, realised_pnl: float,
-                path: str = DB_PATH) -> None:
+                reason: str = "", path: str = DB_PATH) -> None:
+    """Record a close, and WHY.
+
+    The reason was computed at the exit and then dropped, so the journal knew
+    a position had closed for $484 and not whether that was a target hit or a
+    stop taken - which is the more interesting half. Existing rows keep a NULL
+    here; nothing invents a reason after the fact.
+    """
     with connect(path) as c:
-        c.execute("UPDATE orders SET closed_ts=?, realised_pnl=? "
+        c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=? "
                   "WHERE alpaca_order_id=?",
-                  (now(), realised_pnl, alpaca_order_id))
+                  (now(), realised_pnl, reason or None, alpaca_order_id))
 
 
 def snapshot_equity(equity: float, last_equity: float, cash: float,

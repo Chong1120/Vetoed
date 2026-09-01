@@ -307,6 +307,11 @@
   </section>
 
   <section class="card">
+    <h2>Closed positions <span class="hint">what they returned, and why they ended</span></h2>
+    <div id="closed"></div>
+  </section>
+
+  <section class="card">
     <h2>Decisions <span class="hint">including every one the risk gates vetoed</span></h2>
     <div id="decisions"></div>
     <div class="legend"><b>Edge</b> = the same spread priced at realised volatility
@@ -771,6 +776,66 @@ function exitBar(pnl, takeProfit, stopLoss) {
   </div>`;
 }
 
+/* CLOSED POSITIONS.
+   The page could show what it holds and what it decided, and nothing about
+   what it FINISHED. Win rate read "needs closed trades" while one sat in the
+   journal, and the only evidence an exit rule had ever fired was a line
+   buried in a cycle note.
+
+   Two returns, because they answer different questions. "Kept" is how much of
+   the premium survived - the trade's own scorecard. "On risk" is the return
+   against what was staked to earn it, which is the one that compares across
+   positions of different sizes. */
+function closedPositions(rows) {
+  const el = $("closed");
+  if (!el) return;
+  if (!rows || !rows.length) {
+    el.innerHTML = `<div class="empty" style="margin:18px"><strong>Nothing closed yet</strong>
+      Finished trades appear here with what they returned and why they ended.</div>`;
+    return;
+  }
+  const total = rows.reduce((a, r) => a + (Number(r.realised_pnl) || 0), 0);
+  const wins = rows.filter(r => (Number(r.realised_pnl) || 0) > 0).length;
+
+  el.innerHTML = `<div class="tscroll"><table><thead><tr>
+      <th>Underlying</th><th>Strikes</th><th>Qty</th><th>Held</th>
+      <th>Collected</th><th>Realised</th><th>Kept</th><th>On risk</th>
+      <th>Why it ended</th>
+    </tr></thead><tbody>` + rows.map(r => {
+    const pnl = Number(r.realised_pnl);
+    const kS = strikeOf(r.short_symbol), kL = strikeOf(r.long_symbol);
+    const isPut = /put/i.test(r.kind || "");
+    const hrs = (new Date(r.closed_ts) - new Date(r.opened_ts)) / 3600000;
+    const held = !isFinite(hrs) ? NB
+      : hrs < 24 ? hrs.toFixed(1) + "h" : (hrs / 24).toFixed(1) + "d";
+    return `<tr>
+      <td><div class="mono" style="font-weight:600">${esc(r.underlying)}</div>
+        <div class="sub dim">${esc((r.kind || "").replace("_", " "))}</div></td>
+      <td class="mono">
+        <div><span style="color:var(--loss)">SELL</span> ${kS == null ? NB : "$" + kS}
+          ${isPut ? "PUT" : "CALL"}</div>
+        <div class="sub dim">BUY ${kL == null ? NB : "$" + kL} ${isPut ? "PUT" : "CALL"}</div></td>
+      <td class="mono">${r.contracts == null ? NB : r.contracts}</td>
+      <td class="mono">${held}<div class="sub dim">${esc(shortTs(r.closed_ts))}</div></td>
+      <td class="mono pos">${money(r.credit_total)}</td>
+      <td class="mono ${cls(pnl)}" style="font-weight:600">${signed(pnl)}</td>
+      <td class="mono">${r.kept_pct == null ? NB : r.kept_pct.toFixed(0) + "%"}
+        <div class="sub dim">of premium</div></td>
+      <td class="mono">${r.return_on_risk == null ? NB : r.return_on_risk.toFixed(1) + "%"}
+        <div class="sub dim">of ${money(r.max_loss_total)} risked</div></td>
+      <td>${r.exit_reason
+            ? `<span class="pill ${/take profit/i.test(r.exit_reason) ? "on" : "warn"}">${esc(r.exit_reason)}</span>`
+            : `<span class="dim">not recorded</span>`}</td>
+    </tr>`;
+  }).join("") + `</tbody></table></div>
+    <div class="meta-row">
+      <span class="sub"><strong>${rows.length}</strong> closed
+        &middot; <strong>${wins}</strong> profitable</span>
+      <span class="sub">realised total
+        <strong class="${cls(total)}">${signed(total)}</strong></span>
+    </div>`;
+}
+
 function positions(rows, broker, live, spots) {
   broker = broker || [];
   spots = spots || {};
@@ -1117,12 +1182,12 @@ function render() {
 /* ------------------------------------------------------------------ */
 async function refresh() {
   try {
-    let s, e, p, d, r, o, bp, sel;
+    let s, e, p, d, r, o, bp, sel, cl;
     if (MODE === "live") {
-      [s, e, p, d, r, o, bp, sel] = await Promise.all([
+      [s, e, p, d, r, o, bp, sel, cl] = await Promise.all([
         get("summary"), get("equity"), get("positions"),
         get("decisions", "?limit=60"), get("runs", "?limit=30"), get("orders", "?limit=200"),
-        get("broker_positions"), get("selectivity")]);
+        get("broker_positions"), get("selectivity"), get("closed_positions")]);
     } else {
       await fetchSnapshot();
       if (!SNAP) return;
@@ -1133,6 +1198,7 @@ async function refresh() {
       r = SNAP.runs;
       o = SNAP.orders;
       bp = SNAP.broker_positions;
+      cl = SNAP.closed_positions;
       sel = SNAP.selectivity;   // absent in older snapshots; renders nothing
     }
 
@@ -1166,7 +1232,8 @@ async function refresh() {
     if (ctxRun) for (const [sym, v] of Object.entries(ctxRun.context_json)) {
       if (v && v.spot != null) spots[sym] = v.spot;
     }
-    vols(r); positions(p, held, live, spots); decisions(d, r, o);
+    vols(r); positions(p, held, live, spots);
+    closedPositions(cl); decisions(d, r, o);
   } catch (err) { console.error("Refresh error:", err); }
 }
 

@@ -245,7 +245,7 @@ async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool,
             short_sym, long_sym, contracts,
             client_order_id=new_client_order_id("close"))
         if res.ok:
-            journal.close_order(row.get("alpaca_order_id") or "", unreal)
+            journal.close_order(row.get("alpaca_order_id") or "", unreal, reason)
             log("  close order submitted: %s" % res.order.get("id"))
         else:
             error("  close FAILED: %s" % res.error)
