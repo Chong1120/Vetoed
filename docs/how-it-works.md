@@ -1210,7 +1210,7 @@ ever tighten.
 ## Appendix — reproducing every number here
 
 ```bash
-python -m pytest -q                  # 207 tests
+python -m pytest -q                  # 225 tests
 python -m scripts.run_screener       # live screen, read-only
 python -m agent.loop --force         # one dry-run cycle, market closed
 uvicorn dashboard.api:app --port 8000

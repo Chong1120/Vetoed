@@ -223,17 +223,62 @@ will not combine `--force` with `--live`).
 
 ### 4. Schedule
 
+One session per trading day. Inside it the agent analyses approximately every
+**10 minutes** and may open a position on at most one pass in three, so
+entries stay ~30 minutes apart. Exits are checked on **every** pass: a late
+entry costs nothing, a late exit is the real exposure.
+
+**What actually starts it.** A Vercel cron calls `api/start-session.py`, which
+dispatches the workflow through the GitHub API:
+
 ```
-cron: "7,37 13-21 * * 1-5"      # UTC, Mon–Fri
+vercel.json   "crons": [{ "path": "/api/start-session", "schedule": "0 13 * * 1-5" }]
 ```
 
-It analyses approximately every 10 minutes and may open a position on at most one pass in three, so entries stay ~30 minutes apart. Exits are checked on every pass: a late entry costs nothing, a late exit is the real exposure. The window is deliberately wide — 13:00–21:00
-UTC covers the US session under both EDT and EST, so no daylight-saving change
-can silently stop it.
+That endpoint requires `CRON_SECRET` and refuses every request without it,
+because a public URL that can start trading is not something to leave open. It
+needs `GITHUB_DISPATCH_TOKEN` (Actions: read and write, this repo only).
 
-The window is only a coarse filter. **Alpaca's own clock is checked at the top
-of every cycle and is authoritative**, because it knows holidays and early
-closes that no cron expression does.
+**Why not GitHub's own cron.** The workflow still carries one:
+
+```
+cron: "25 13 * * 1-5"           # UTC, Mon–Fri
+cron: "0 17 * * 1-5"
+```
+
+It has never fired — zero scheduled runs across every run this repository has
+had, with valid YAML on the default branch of a public repo, Actions enabled
+and the workflow reporting `state: active`. GitHub schedules are best-effort
+and may be dropped. It is left in as a second chance; the concurrency group
+means the two triggers cannot both trade.
+
+Either way the schedule is only a coarse filter. **Alpaca's own clock is
+checked at the top of every cycle and is authoritative**, because it knows
+holidays and early closes that no cron expression does.
+
+### 4b. Timeouts, and why they exist
+
+A cycle that never returns is worse than one that fails: the session holds its
+runner for hours, journals nothing, and looks exactly like a dead agent.
+
+| Bound | Value | Covers |
+|---|---|---|
+| `MCP_CALL_TIMEOUT_SECONDS` | 90s | a broker call that stops answering |
+| `VETOED_CYCLE_TIMEOUT` | 300s | anything else that hangs a cycle |
+| journal push | 45s | git waiting on credentials that will never come |
+
+Killing a cycle is safe by construction: every entry carries a deterministic
+`client_order_id` Alpaca refuses twice, and the next pass rebuilds its view
+from the broker rather than the journal.
+
+### 4c. Pinned dependencies
+
+`fastmcp` is pinned to `==3.4.7` and every other dependency has an upper
+bound. This is not tidiness. `fastmcp 4.0.0` was published mid-session and
+moved `fastmcp.tools.tool`, which `alpaca-mcp-server` imports at startup — the
+MCP server could not boot, so no cycle could reach the broker. Nothing in this
+repository had changed; CI installs fresh, and the ranges were open. Raise
+them deliberately, after running the suite.
 
 ### 5. Watch it
 
@@ -324,7 +369,7 @@ Honest accounting, because this is the real trade-off:
 .venv\Scripts\python.exe -m pytest tests\ -q
 ```
 
-**207 tests** covering the risk gates (naked-short rejection, loss-cap
+**225 tests** covering the risk gates (naked-short rejection, loss-cap
 verification, daily loss stop, concentration, sizing), the brain's defensive
 JSON parsing (hallucinated legs, flipped sides, garbage types), the probability
 maths, and the guardrail restrict-only invariant.
