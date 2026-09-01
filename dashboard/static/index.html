@@ -91,21 +91,6 @@
   .legs-toggle:hover { border-color: var(--muted); color: var(--text); }
   .legs-toggle .chev { transition: transform .15s ease; display: inline-block; }
   .legs-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
-  /* Filter + pager controls for the decision log. */
-  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-  .tab { font: inherit; font-size: 11px; letter-spacing: .04em;
-         text-transform: uppercase; cursor: pointer; padding: 5px 11px;
-         border-radius: 999px; border: 1px solid var(--line);
-         background: transparent; color: var(--muted); }
-  .tab:hover { color: var(--text); border-color: var(--muted); }
-  .tab[aria-pressed="true"] { color: var(--ground); background: var(--text);
-         border-color: var(--text); }
-  .pager { display: flex; align-items: center; gap: 10px;
-           justify-content: flex-end; margin-top: 12px; }
-  .pager button { font: inherit; font-size: 12px; cursor: pointer;
-           padding: 5px 12px; border-radius: 6px; color: var(--text);
-           border: 1px solid var(--line); background: transparent; }
-  .pager button:disabled { opacity: .35; cursor: default; }
   .dim { color: var(--muted); }
 
   /* ---------------- header ---------------- */
