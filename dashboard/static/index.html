@@ -1093,6 +1093,7 @@ const DEC_FILTERS = [
 
 function decClass(d, orderFor) {
   if (d._exit) return "exit";
+  if (String(d.outcome || "").toLowerCase() === "recovered") return "traded";
   const o = orderFor.get(d.id);
   const st = String((o && o.status) || "").toLowerCase();
   const outcome = String(d.outcome || "").toLowerCase();
@@ -1224,6 +1225,11 @@ function render() {
           ? `<div style="margin-top:6px"><span class="pill off">passed</span></div>`
       : outcome === "no candidates"
           ? `<div style="margin-top:6px"><span class="pill off">nothing cleared the gate</span></div>`
+      // A row rebuilt from the broker after its journal commit was lost. It
+      // must never pass for one the agent wrote: the trade is real, the
+      // reasoning behind it is gone.
+      : outcome === "recovered"
+          ? `<div style="margin-top:6px"><span class="pill warn">recovered from broker</span></div>`
       : "";
 
     const run = runById.get(d.run_id);
