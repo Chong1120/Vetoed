@@ -290,12 +290,22 @@ def _rows(sql: str, args=(), path: str = DB_PATH) -> list[dict]:
         return [dict(r) for r in c.execute(sql, args).fetchall()]
 
 
+# Newest by WHEN IT HAPPENED, not by when the row was written.
+#
+# Insertion order and chronology are the same thing right up until a row is
+# recovered - a cycle whose journal commit was lost, reimported from the
+# broker afterwards. That row carries the newest id and an older timestamp,
+# and ordering by id made a 16:41 cycle outrank a 17:17 one: the funnel and
+# the volatility cards read runs[0] as "the latest cycle" and would have shown
+# a recovered row with no candidates in it. The id tiebreak keeps ordering
+# stable when two rows share a timestamp.
 def recent_runs(limit: int = 50, path: str = DB_PATH) -> list[dict]:
-    return _rows("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (limit,), path)
+    return _rows("SELECT * FROM runs ORDER BY ts DESC, id DESC LIMIT ?",
+                 (limit,), path)
 
 
 def recent_decisions(limit: int = 200, path: str = DB_PATH) -> list[dict]:
-    return _rows("SELECT * FROM decisions ORDER BY id DESC LIMIT ?",
+    return _rows("SELECT * FROM decisions ORDER BY ts DESC, id DESC LIMIT ?",
                  (limit,), path)
 
 
