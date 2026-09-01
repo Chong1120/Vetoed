@@ -43,6 +43,21 @@ def _get(path: str, key: str, secret: str):
         return json.loads(fh.read().decode("utf-8"))
 
 
+def _series(hist):
+    """Timestamped equity points, with the padding removed."""
+    if not isinstance(hist, dict):
+        return []
+    ts = hist.get("timestamp") or []
+    eq = hist.get("equity") or []
+    out = []
+    for t, v in zip(ts, eq):
+        n = _num(v)
+        if n is None or n <= 0:             # padding, not a reading
+            continue
+        out.append({"t": int(t), "equity": n})
+    return out
+
+
 def _num(v):
     try:
         return float(v)
@@ -65,6 +80,15 @@ def build():
     try:
         acct = _get("/account", key, secret)
         positions = _get("/positions", key, secret)
+        # The broker's own equity series. Ours is one point per cycle - a dot
+        # every ten minutes at best, and nothing at all overnight. This is the
+        # same account at 15-minute resolution, and it is the broker's record
+        # rather than our reading of it.
+        try:
+            hist = _get("/account/portfolio/history?period=1W&timeframe=15Min",
+                        key, secret)
+        except Exception:
+            hist = None                     # never fail the whole call for it
     except urllib.error.HTTPError as exc:
         return 502, {"available": False,
                      "reason": "alpaca returned HTTP %d" % exc.code}
@@ -82,6 +106,9 @@ def build():
         "last_equity": _num(acct.get("last_equity")),
         "cash": _num(acct.get("cash")),
         "buying_power": _num(acct.get("buying_power")),
+        # Alpaca pads the series with zeros where the account did not exist
+        # yet; plotting those draws a cliff to the axis that never happened.
+        "equity_series": _series(hist),
         "positions": [{
             "symbol": p.get("symbol"),
             "qty": _num(p.get("qty")),

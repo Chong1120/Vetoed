@@ -133,6 +133,14 @@ def live() -> JSONResponse:
         client = TradingClient(key, secret, paper=True)
         acct = client.get_account()
         positions = client.get_all_positions()
+        # The broker's own equity series, at 15-minute resolution. Ours is one
+        # point per cycle and nothing overnight.
+        try:
+            from alpaca.trading.requests import GetPortfolioHistoryRequest
+            hist = client.get_portfolio_history(
+                GetPortfolioHistoryRequest(period="1W", timeframe="15Min"))
+        except Exception:
+            hist = None                     # never fail the whole call for it
     except Exception as exc:                        # network, auth, rate limit
         return JSONResponse({"available": False,
                              "reason": "%s: %s" % (type(exc).__name__, exc)},
@@ -144,8 +152,19 @@ def live() -> JSONResponse:
         except (TypeError, ValueError):
             return None
 
+    series = []
+    if hist is not None:
+        # Alpaca pads with zeros where the account did not exist yet; plotting
+        # those draws a cliff to the axis that never happened.
+        for t, v in zip(getattr(hist, "timestamp", None) or [],
+                        getattr(hist, "equity", None) or []):
+            e = num(v)
+            if e and e > 0:
+                series.append({"t": int(t), "equity": e})
+
     return JSONResponse({
         "available": True,
+        "equity_series": series,
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "equity": num(acct.equity),
         "last_equity": num(acct.last_equity),

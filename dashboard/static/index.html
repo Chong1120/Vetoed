@@ -467,7 +467,13 @@ function kpis(s, orders, broker, live) {
 }
 
 /* ------------------------------------------------------------------ */
-function chart(rows) {
+/* The equity curve prefers the BROKER's series when one is available.
+   Ours is one point per cycle - a dot every ten minutes at best, nothing
+   overnight, and it only exists where a cycle happened to run. Alpaca's is
+   the same account at 15-minute resolution, and it is the broker's record
+   rather than our reading of it. Falls back to the journal when no live
+   source answers, which is always a valid view. */
+function chart(rows, fromBroker) {
   const svg = $("chart");
   if (!rows.length) {
     $("chart-hint").textContent = "";
@@ -517,7 +523,11 @@ function chart(rows) {
     <circle cx="${x(rows.length - 1)}" cy="${y(last)}" r="3.5" fill="${stroke}"/>
     <text class="axis-text" x="${L}" y="${H - 8}">${first}</text>
     <text class="axis-text" x="${W - R}" y="${H - 8}" text-anchor="end">${lastT}</text>`;
-  $("chart-hint").innerHTML = `${rows.length} snapshot${rows.length === 1 ? "" : "s"}`;
+  // Say whose numbers these are. A curve drawn from our journal and one drawn
+  // from the broker are different claims, and the reader should know which.
+  $("chart-hint").innerHTML = fromBroker
+    ? `${rows.length} points &middot; 15 min, from Alpaca`
+    : `${rows.length} snapshot${rows.length === 1 ? "" : "s"} &middot; one per cycle`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1127,7 +1137,10 @@ async function refresh() {
       } catch (_) { /* stays null; the snapshot path is always valid */ }
     }
     const held = live ? live.positions : bp;
-    status(s, r, live); kpis(s, o, held, live); chart(e); funnel(r, d, o, sel);
+    const series = (live && live.equity_series && live.equity_series.length > 1)
+      ? live.equity_series : e;
+    status(s, r, live); kpis(s, o, held, live);
+    chart(series, series !== e); funnel(r, d, o, sel);
     // Spot prices come from the screening context of the most recent cycle
     // that captured one - the same source the volatility cards use.
     const ctxRun = (r || []).find(x => x.context_json && Object.keys(x.context_json).length);

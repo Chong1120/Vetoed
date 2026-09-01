@@ -256,6 +256,28 @@ Either way the schedule is only a coarse filter. **Alpaca's own clock is
 checked at the top of every cycle and is authoritative**, because it knows
 holidays and early closes that no cron expression does.
 
+### 4a. What the dashboard reads, and from where
+
+Three sources, kept distinct on the page so a reader always knows whose
+numbers they are looking at:
+
+| Panel | Source | Freshness |
+|---|---|---|
+| Decisions, funnel, selectivity | the journal, committed each cycle | ~10 min |
+| Equity, positions, unrealised P&L | Alpaca, through a read-only proxy | 30 s |
+| Equity curve | Alpaca portfolio history, 15-minute bars | 30 s |
+
+The equity curve used to be drawn from our own snapshots - one point per
+cycle, nothing overnight, and only where a cycle happened to run. It now
+prefers Alpaca's own series and says which it is showing. With no live source
+it falls back to the journal, which is always a valid view.
+
+`api/live.py` holds the credentials so the published page never has to. It
+performs exactly three GETs - account, positions, portfolio history - and
+contains no code path that can place, cancel or modify an order. What it
+returns is public to anyone with the URL, which is the trade-off a demo
+dashboard makes and the reason it cannot act.
+
 ### 4b. Timeouts, and why they exist
 
 A cycle that never returns is worse than one that fails: the session holds its
