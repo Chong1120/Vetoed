@@ -1,14 +1,23 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
-    { "path": "/api/start-session", "schedule": "0 13 * * 1-5" }
+    {
+      "path": "/api/start-session",
+      "schedule": "0 13 * * 1-5"
+    }
   ],
   "headers": [
     {
-      "source": "/api/live",
+      "source": "/api/(live|journal)",
       "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Cache-Control", "value": "no-store, max-age=0" }
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0"
+        }
       ]
     }
   ]

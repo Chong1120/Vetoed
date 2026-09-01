@@ -340,6 +340,13 @@ const LIVE_API = "https://vetoed-three.vercel.app/api/live";
 const JOURNAL_RAW =
   "https://raw.githubusercontent.com/Chong1120/Vetoed/main/journal/data.json";
 
+// Same journal, read through the proxy instead. raw sits behind a five-minute
+// CDN cache - measured: 58 seconds after a push it still served the previous
+// file, and a cache-busting query string did not change that. The proxy reads
+// the GitHub contents API, which is not that CDN, and returns no-store. This
+// is the one that makes the decision log current; the two below are fallbacks.
+const JOURNAL_API = "https://vetoed-three.vercel.app/api/journal";
+
 const NB = "&mdash;";
 
 const money = (v, dp = 2) => v == null ? NB :
@@ -375,17 +382,21 @@ async function detectMode() {
 async function fetchSnapshot() {
   const bust = "?_t=" + Date.now();
 
-  // Prefer the journal committed in the repository. This page's own data.json
-  // is frozen at the last Pages build, which during a session is hours old;
-  // the committed one is rewritten every cycle. Newest wins either way, so a
-  // stale raw read can never move the page backwards.
-  let fromRaw = null;
-  if (JOURNAL_RAW) {
+  // Three sources, tried together, newest wins. The page's own data.json is
+  // frozen at the last Pages build - during a session, hours old. raw serves
+  // the newest commit but up to five minutes late. The proxy is current to
+  // the second. Racing them means a slow or failed source costs nothing and
+  // can never move the page backwards.
+  const grab = async (url) => {
+    if (!url) return null;
     try {
-      const r = await fetch(JOURNAL_RAW + bust, { cache: "no-store" });
-      if (r.ok) fromRaw = await r.json();
-    } catch (_) { /* offline, blocked, or renamed - fall through */ }
-  }
+      const r = await fetch(url + bust, { cache: "no-store" });
+      return r.ok ? await r.json() : null;
+    } catch (_) { return null; }
+  };
+  const [fromApi, fromRaw] = await Promise.all([
+    grab(JOURNAL_API), grab(JOURNAL_RAW),
+  ]);
 
   let bundled = null;
   try {
@@ -396,7 +407,10 @@ async function fetchSnapshot() {
   }
 
   const at = (d) => (d && d.generated_at) ? String(d.generated_at) : "";
-  SNAP = (fromRaw && at(fromRaw) >= at(bundled)) ? fromRaw : (bundled || fromRaw || SNAP);
+  const best = [fromApi, fromRaw, bundled, SNAP]
+    .filter(Boolean)
+    .sort((a, b) => at(b).localeCompare(at(a)))[0];
+  if (best) SNAP = best;
 }
 
 async function get(key, query = "") {
