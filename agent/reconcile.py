@@ -45,6 +45,7 @@ checking the broker's positions and working orders, and marks them
 
 from __future__ import annotations
 
+import re
 import hashlib
 from dataclasses import dataclass, field
 from datetime import date
@@ -269,7 +270,82 @@ def reconcile(state: BrokerState, rows: list[dict] | None = None,
             "%d option leg(s) held at the broker with no matching open journal "
             "row: %s - counted toward concentration"
             % (len(r.orphan_legs), ", ".join(sorted(r.orphan_legs)[:6])))
+        r.corrections.extend(_adopt_orphans(state, r.orphan_legs, path))
     return r
+
+
+def _occ(sym: str):
+    """(root, expiry, right, strike) from an OCC symbol, or None."""
+    m = re.match(r"^([A-Z]+)(\d{6})([CP])(\d{8})$", str(sym or ""))
+    if not m:
+        return None
+    return m.group(1), m.group(2), m.group(3), int(m.group(4)) / 1000.0
+
+
+def _adopt_orphans(state: "BrokerState", orphans: list, path: str | None) -> list:
+    """Write a journal row for a spread the broker holds and the journal lost.
+
+    Detecting an orphan and counting it toward concentration keeps the RISK
+    correct, which is why that came first. But the journal stayed permanently
+    short: a position the agent genuinely opened was missing from its own
+    record, the dashboard under-reported what was held, and a hand-written
+    repair was overwritten by the next cycle that committed.
+
+    So the agent adopts it. Every field comes from the broker's position -
+    symbols, quantity, average entry price - and the row is marked adopted, so
+    it can never be mistaken for one journalled at the time. Nothing about the
+    model's reasoning is invented; there is none to invent, and the decision
+    that produced it is gone.
+
+    Only complete spreads are adopted. A single unpaired leg is the dangerous
+    case the caller already flags, and inventing a second leg to tidy it away
+    would hide exactly the thing worth seeing.
+    """
+    notes: list = []
+    by_pair: dict = {}
+    for sym in orphans:
+        parsed = _occ(sym)
+        if not parsed:
+            continue
+        root, expiry, right, strike = parsed
+        try:
+            qty = float((state.legs.get(sym) or {}).get("qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        if not qty:
+            continue
+        by_pair.setdefault((root, expiry, right), []).append((sym, qty, strike))
+
+    for (root, expiry, right), legs in by_pair.items():
+        shorts = [l for l in legs if l[1] < 0]
+        longs = [l for l in legs if l[1] > 0]
+        if len(shorts) != 1 or len(longs) != 1:
+            continue                       # not a clean two-leg spread
+        (s_sym, s_qty, s_k), (l_sym, l_qty, l_k) = shorts[0], longs[0]
+        if abs(s_qty) != abs(l_qty):
+            continue                       # ratio spread, not ours
+        contracts = int(abs(s_qty))
+
+        def price(sym):
+            try:
+                return abs(float((state.legs.get(sym) or {}).get("avg_entry_price") or 0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        credit = price(s_sym) - price(l_sym)
+        width = abs(s_k - l_k)
+        if credit <= 0 or width <= 0:
+            continue                       # not a credit spread we recognise
+        max_loss = width * 100 * contracts - credit * 100 * contracts
+        kind = "put_credit" if right == "P" else "call_credit"
+
+        journal.adopt_order(
+            underlying=root, kind=kind, short_symbol=s_sym, long_symbol=l_sym,
+            contracts=contracts, credit=credit, max_loss_total=max_loss,
+            **({"path": path} if path else {}))
+        notes.append("ADOPTED %s %s %g/%g x%d from the broker - held with no "
+                     "journal row" % (root, kind, s_k, l_k, contracts))
+    return notes
 
 
 def account_state_from(reconciliation: Reconciliation, equity: float,

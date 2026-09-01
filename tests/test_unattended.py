@@ -368,3 +368,67 @@ def test_health_file_is_written_and_merged(monkeypatch, tmp_path):
 def test_health_write_failure_never_raises(monkeypatch):
     monkeypatch.setattr(loop, "HEALTH_PATH", "/nonexistent\x00/health.json")
     loop.write_health(cycle_state="running")    # must not raise
+
+
+# --------------------------------------------------------------------------
+# A position the journal lost must come back on its own.
+#
+# Detecting an orphan and counting it toward concentration keeps the RISK
+# right, and that came first. But the journal stayed permanently short: a real
+# position missing from the agent's own record, under-reported on the
+# dashboard, and a hand-written repair overwritten by the next cycle that
+# committed. The agent has to adopt it, or the record never heals.
+
+def _leg(sym, qty, avg):
+    return {"symbol": sym, "qty": str(qty), "avg_entry_price": str(avg)}
+
+
+def test_an_orphan_spread_is_adopted_into_the_journal(tmp_path):
+    db = str(tmp_path / "j.db")
+    journal.init(db)
+    state = reconcile.BrokerState(legs={
+        "QQQ260904C00714000": _leg("QQQ260904C00714000", -14, 2.05),
+        "QQQ260904C00719000": _leg("QQQ260904C00719000", 14, 0.66),
+    })
+    assert journal.open_spreads(path=db) == []
+
+    rec = reconcile.reconcile(state, rows=[], path=db)
+
+    rows = journal.open_spreads(path=db)
+    assert len(rows) == 1, "the broker holds it; the journal must too"
+    row = rows[0]
+    assert row["underlying"] == "QQQ"
+    assert row["kind"] == "call_credit"
+    assert row["contracts"] == 14
+    assert row["status"] == "adopted", "never mistakable for a live journal row"
+    # credit is the broker's own prices, not a guess
+    assert row["credit"] == pytest.approx(2.05 - 0.66)
+    # 5 wide, 14 contracts, minus the credit taken in
+    assert row["max_loss_total"] == pytest.approx(5 * 100 * 14 - 1.39 * 100 * 14)
+    assert any("ADOPTED" in c for c in rec.corrections)
+
+
+def test_adoption_does_not_duplicate_on_the_next_cycle(tmp_path):
+    db = str(tmp_path / "j.db")
+    journal.init(db)
+    state = reconcile.BrokerState(legs={
+        "QQQ260904C00714000": _leg("QQQ260904C00714000", -14, 2.05),
+        "QQQ260904C00719000": _leg("QQQ260904C00719000", 14, 0.66),
+    })
+    reconcile.reconcile(state, rows=[], path=db)
+    rows = journal.open_spreads(path=db)
+    # second cycle sees the same broker state, now with the row it wrote
+    reconcile.reconcile(state, rows=rows, path=db)
+    assert len(journal.open_spreads(path=db)) == 1
+
+
+def test_a_single_unpaired_leg_is_never_adopted(tmp_path):
+    """The dangerous case must stay visible, not be tidied into a spread."""
+    db = str(tmp_path / "j.db")
+    journal.init(db)
+    state = reconcile.BrokerState(legs={
+        "QQQ260904C00714000": _leg("QQQ260904C00714000", -14, 2.05),
+    })
+    rec = reconcile.reconcile(state, rows=[], path=db)
+    assert journal.open_spreads(path=db) == [], "a naked leg is not a spread"
+    assert rec.orphan_legs == ["QQQ260904C00714000"]

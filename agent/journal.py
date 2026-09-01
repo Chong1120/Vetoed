@@ -256,6 +256,38 @@ def set_decision_outcome(decision_id: int, outcome: str,
                   (outcome, decision_id))
 
 
+def adopt_order(underlying: str, kind: str, short_symbol: str,
+                long_symbol: str, contracts: int, credit: float,
+                max_loss_total: float, path: str = DB_PATH) -> int | None:
+    """Record a spread the broker holds that this journal has no row for.
+
+    Written when a cycle's journal commit was lost: the trade happened, the
+    record did not survive. Every value comes from the broker's own position.
+    The row carries no decision, because the decision is gone and will not be
+    invented; status is 'adopted' so it can never read as one journalled live.
+
+    Idempotent on the leg pair - a second cycle finding the same orphan must
+    not write it twice.
+    """
+    with connect(path) as c:
+        dup = c.execute(
+            "SELECT id FROM orders WHERE short_symbol=? AND long_symbol=? "
+            "AND closed_ts IS NULL", (short_symbol, long_symbol)).fetchone()
+        if dup:
+            return None
+        cur = c.execute(
+            "INSERT INTO orders (decision_id, ts, alpaca_order_id,"
+            " client_order_id, underlying, kind, short_symbol, long_symbol,"
+            " contracts, limit_price, credit, max_loss_total, status,"
+            " filled_qty, fill_price, raw_json)"
+            " VALUES (NULL,?,NULL,NULL,?,?,?,?,?,?,?,?,'adopted',?,?,?)",
+            (now(), underlying, kind, short_symbol, long_symbol, contracts,
+             credit, credit, max_loss_total, contracts, credit,
+             json.dumps({"adopted": "held at the broker with no journal row; "
+                                    "fields are the broker's own position"})))
+        return int(cur.lastrowid)
+
+
 def close_order(alpaca_order_id: str, realised_pnl: float,
                 reason: str = "", path: str = DB_PATH) -> None:
     """Record a close, and WHY.
