@@ -243,6 +243,32 @@ async function checkAgentPanel(reply, expect, label) {
   }
   C2.range = "all";
   ctx.chart(data.equity, false);
+
+  // The very first point cannot have made money: it IS the starting balance.
+  // Measuring profit from the first point IN VIEW rather than from inception
+  // made the tooltip announce a six-figure gain at the moment the account
+  // opened, and made the figure change whenever a range preset was pressed.
+  {
+    const G = vm.runInContext("CHART", ctx).geom;
+    if (!G || G.origin == null) {
+      console.error("CHART has no inception baseline");
+      process.exit(1);
+    }
+    const firstProfit = G.vals[0] - G.origin;
+    if (Math.abs(firstProfit) > 0.005) {
+      console.error("CHART first point claims a profit of " + firstProfit);
+      process.exit(1);
+    }
+    // ...and it must not move when the range does.
+    const o = G.origin;
+    const C3 = vm.runInContext("CHART", ctx);
+    C3.range = "1d"; ctx.drawChart();
+    if (vm.runInContext("CHART", ctx).geom.origin !== o) {
+      console.error("CHART baseline moved with the range preset");
+      process.exit(1);
+    }
+    C3.range = "all"; ctx.drawChart();
+  }
   if (!full || !day) {
     console.error("CHART RANGE produced nothing: all=" + full + " 1d=" + day);
     process.exit(1);

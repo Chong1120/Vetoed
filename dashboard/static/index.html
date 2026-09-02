@@ -799,7 +799,7 @@ function wireCrosshair() {
     const dot = g.querySelector(".cross-dot");
     dot.setAttribute("cx", px); dot.setAttribute("cy", py);
     if (!tip) return;
-    const chg = v - G.base, dd = G.peaks[i] > 0 ? (G.peaks[i] - v) / G.peaks[i] : 0;
+    const chg = v - G.origin, dd = G.peaks[i] > 0 ? (G.peaks[i] - v) / G.peaks[i] : 0;
     // textContent, not innerHTML - these values are journal data.
     tip.innerHTML = "";
     const add = (k, val, cls) => {
@@ -813,10 +813,16 @@ function wireCrosshair() {
     const when = document.createElement("div");
     when.className = "twhen"; when.textContent = shortTs(tsOf(G.rows[i])) + " UTC";
     tip.appendChild(when);
-    add("equity", money(v), "");
-    add("vs start", (chg >= 0 ? "+" : "") + money(chg), chg >= 0 ? "c-profit" : "c-loss");
-    add("off peak", dd > 0 ? "-" + (dd * 100).toFixed(2) + "%" : "at high", dd > 0 ? "c-loss" : "");
-    if (G.rows[i].open_positions != null) add("open", String(G.rows[i].open_positions), "");
+    // Plain words. "vs start" read as jargon and left the reader working out
+    // which start was meant.
+    add("account value", money(v), "");
+    add("profit so far", (chg >= 0 ? "+" : "") + money(chg),
+        chg >= 0 ? "c-profit" : "c-loss");
+    add("below its peak", dd > 0 ? "-" + (dd * 100).toFixed(2) + "%" : "at its peak",
+        dd > 0 ? "c-loss" : "");
+    if (G.rows[i].open_positions != null) {
+      add("positions open", String(G.rows[i].open_positions), "");
+    }
     tip.hidden = false;
     // Keep it inside the card rather than letting it run off the right edge.
     const frac = (px - G.L) / (G.W - G.L - G.R);
@@ -902,7 +908,15 @@ function drawChart() {
   const y = v => T + (hi - v) * (H - T - B) / (hi - lo);
   const up = last >= base;
   const stroke = up ? "var(--profit)" : "var(--loss)";
-  CHART.geom = { rows, vals, peaks, x, y, W, H, L, R, T, B, base };
+  /* Two different baselines, and conflating them is what made the readout
+     unreadable. `base` is the first point IN VIEW - the curve's own reference
+     line, which has to move when the range moves. `origin` is the first point
+     of the whole series, the account as it started, which must NOT move: a
+     reader asking "how much has it made" means since inception, not since the
+     left edge of whichever preset they happen to have selected. The tooltip
+     reports the second and says so. */
+  const origin = Number(CHART.rows[0].equity);
+  CHART.geom = { rows, vals, peaks, x, y, W, H, L, R, T, B, base, origin };
 
   const pts = rows.map((r, i) => `${x(i).toFixed(1)},${y(vals[i]).toFixed(1)}`).join(" ");
   const hwm = rows.map((r, i) => `${x(i).toFixed(1)},${y(peaks[i]).toFixed(1)}`).join(" ");
@@ -947,10 +961,12 @@ function drawChart() {
   const peak = Math.max(...vals);
   if ($("chart-stats")) {
     $("chart-stats").innerHTML = [
-      ["now", money(last), up ? "profit" : "loss"],
-      ["peak", money(peak), ""],
-      ["max drawdown", "-" + (maxDD * 100).toFixed(2) + "%", maxDD > 0 ? "loss" : ""],
-      ["return", ((last - base) / base * 100).toFixed(2) + "%", up ? "profit" : "loss"],
+      ["account value", money(last), up ? "profit" : "loss"],
+      ["best it reached", money(peak), ""],
+      ["worst fall from a peak", "-" + (maxDD * 100).toFixed(2) + "%",
+       maxDD > 0 ? "loss" : ""],
+      ["return", ((last - base) / base * 100).toFixed(2) + "%",
+       up ? "profit" : "loss"],
     ].map(([k, v, c]) =>
       `<div class="cstat"><span class="k">${k}</span>
         <span class="v ${c ? "c-" + c : ""}">${v}</span></div>`).join("");

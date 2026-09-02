@@ -6,6 +6,18 @@
 # session, and it is not read from the bundle at all: api/journal.py fetches it
 # live from the GitHub contents API, which is what makes the dashboard current
 # rather than as-of-last-deploy.
+# pyproject.toml declares packages = ["agent", "dashboard"], and both are
+# excluded below. Leaving it uploaded invites Vercel's Python builder to
+# install the project and fail on packages that are not there - a build that
+# fails leaves the previous deployment serving, so the site quietly keeps the
+# bug the push was fixing. api/requirements.txt is the only dependency
+# declaration these functions need, and it is empty on purpose.
+pyproject.toml
+setup.py
+setup.cfg
+uv.lock
+poetry.lock
+
 agent/
 dashboard/
 docs/
