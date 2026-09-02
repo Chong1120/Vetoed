@@ -60,6 +60,15 @@
   .ai-wrap.open .ai-caret { transform: rotate(180deg); }
   .ai-wrap.open .ai-btn { border-color: var(--accent-dk); color: var(--text); }
 
+  /* The hidden attribute must win, always.
+     Browsers style [hidden] as display:none from the user-agent sheet, and
+     ANY author rule setting display beats it. .ai-chat sets display:flex, so
+     the panel could be opened and never closed - it only looked shut to begin
+     with because an empty flex box shows nothing. Declared here as an author
+     rule so it outranks the class, and applied to everything so the next
+     element toggled with .hidden cannot inherit the same fault. */
+  [hidden] { display: none !important; }
+
   .ai-chat {
     margin-top: 9px; padding: 13px 14px; max-width: 68ch;
     background: var(--raised); border: 1px solid var(--line);

@@ -197,6 +197,16 @@ async function checkAgentPanel(reply, expect, label) {
   if (!chat.hidden) { console.error(label + ": second press did not close"); process.exit(1); }
 }
 
+// The VM has no CSS, so it cannot catch a panel that opens and never closes.
+// This is the static half: anything toggled with .hidden in the script needs
+// an author-level [hidden] rule, because a class setting display beats the
+// browser's own [hidden] styling and the attribute stops doing anything.
+if (/\.hidden\s*=/.test(src) && !/\[hidden\]\s*\{[^}]*display:\s*none/.test(src)) {
+  console.error("ELEMENTS ARE TOGGLED WITH .hidden BUT NO [hidden] CSS RULE EXISTS");
+  console.error("  a class setting display will override the browser default");
+  process.exit(1);
+}
+
 // A pointer crossing a row fires enter, then down, then click - three asks
 // for one note. They must share a single request.
 async function checkNoteDedupe() {
