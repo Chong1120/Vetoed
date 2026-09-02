@@ -211,10 +211,29 @@ class handler(BaseHTTPRequestHandler):
         else:
             status, body = explain(leg)
         out = json.dumps(body).encode("utf-8")
+        # Writing the note costs about six seconds of model time; serving one
+        # already written costs a tenth of one. The old five-minute cache threw
+        # the result away while the position it describes was still open, so a
+        # reader arriving six minutes after the last one paid the full six
+        # seconds again for a paragraph that had not changed and could not.
+        #
+        # A CLOSED position is finished: its entry, its exit and its result are
+        # all final, and its note is immutable, so it is cached hard. An OPEN
+        # one is cached for an hour and then served stale while a fresh copy
+        # is fetched behind it - the reader waits for nothing, and the only
+        # thing that can age is the position closing, which the row's own
+        # numbers report correctly regardless.
+        if status != 200:
+            cache = "no-store"
+        elif body.get("state") == "closed":
+            cache = "public, max-age=600, s-maxage=604800, immutable"
+        else:
+            cache = ("public, max-age=300, s-maxage=3600, "
+                     "stale-while-revalidate=86400")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Cache-Control", "public, max-age=300")
+        self.send_header("Cache-Control", cache)
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
         self.wfile.write(out)

@@ -147,7 +147,8 @@ for (const f of FILTERS) {
 const probe = {
   id: "screen-probe", ts: "2026-09-02T14:00:00+00:00",
   _screen: { measured: 131, rejected: 1782,
-    by_reason: [{reason: "oi_too_thin", label: "open interest below the liquidity floor", count: 1029},
+    by_reason: [{reason: "oi_too_thin", label: "open interest below the liquidity floor", count: 1029,
+                 examples: ["SPY 690 CALL 2DTE - open interest 93, floor 500"]},
                 {reason: "premium_too_small", label: "premium too small to be worth the risk", count: 514},
                 {reason: "edge_too_low", label: "measured edge below the $2.00 minimum", count: 1}],
     near_misses: [{underlying: "QQQ", kind: "call_credit", short_strike: 721,
@@ -160,7 +161,8 @@ try {
   console.error("SCREENED-OUT ROW THREW: " + e.message);
   process.exit(1);
 }
-for (const must of ["1,782", "1,029", "open interest below", "QQQ", "$1.42"]) {
+for (const must of ["1,782", "1,029", "open interest below", "QQQ", "$1.42",
+                    "SPY 690 CALL 2DTE - open interest 93, floor 500"]) {
   if (!els.decisions.innerHTML.includes(must)) {
     console.error("SCREENED-OUT ROW MISSING '" + must + "'");
     console.error(els.decisions.innerHTML.slice(0, 700));
@@ -195,7 +197,32 @@ async function checkAgentPanel(reply, expect, label) {
   if (!chat.hidden) { console.error(label + ": second press did not close"); process.exit(1); }
 }
 
+// A pointer crossing a row fires enter, then down, then click - three asks
+// for one note. They must share a single request.
+async function checkNoteDedupe() {
+  let calls = 0;
+  ctx.fetch = () => { calls++; return Promise.resolve(
+    {ok: true, json: () => Promise.resolve({explanation: "cached answer"})}); };
+  vm.runInContext("NOTES", ctx).clear();
+  vm.runInContext("NOTE_INFLIGHT", ctx).clear();
+  const leg = "SPY260904C00769000";
+  const all = await Promise.all([ctx.noteFor(leg), ctx.noteFor(leg), ctx.noteFor(leg)]);
+  if (calls !== 1) {
+    console.error("NOTE DEDUPE: " + calls + " requests for one note, expected 1");
+    process.exit(1);
+  }
+  if (await ctx.noteFor(leg) !== "cached answer" || calls !== 1) {
+    console.error("NOTE DEDUPE: cached answer not reused");
+    process.exit(1);
+  }
+  if (all.some(x => x !== "cached answer")) {
+    console.error("NOTE DEDUPE: concurrent callers got different answers");
+    process.exit(1);
+  }
+}
+
 (async () => {
+  await checkNoteDedupe();
   await checkAgentPanel(
     {ok: true, json: () => Promise.resolve({explanation: "I measured the edge at $25.96 per spread."})},
     ["Why did you open this position?", "$25.96", "ai-msg bot"], "agent panel");
@@ -205,6 +232,6 @@ async function checkAgentPanel(reply, expect, label) {
 
   console.log("  dashboard: all 7 panels render, all " + FILTERS.length +
             " filters render, screened-out row renders, " +
-            "AI reasoning panel opens (" + data.decisions.length +
+            "AI reasoning panel opens, one request per note (" + data.decisions.length +
             " decisions, " + data.positions.length + " spreads)");
 })();

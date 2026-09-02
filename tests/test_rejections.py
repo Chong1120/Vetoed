@@ -120,3 +120,22 @@ def test_tally_survives_the_json_round_trip_the_journal_does():
     r = Rejections()
     screen_snapshot(_chain(), rejects=r)
     assert json.loads(json.dumps(r.to_dict())) == r.to_dict()
+
+
+def test_a_five_cent_spread_is_never_refused_by_binary_rounding():
+    """0.34 - 0.29 is 0.050000000000000044 in binary; the cap is 0.05.
+
+    Both of these are five-cent spreads and the gate admits five cents, so
+    both must pass. Before rounding, the first was refused and the second
+    admitted - identical spreads, decided by float representation.
+    """
+    from agent.screener import _spread_ok
+    row = lambda bid, ask: OptionRow(
+        symbol="SPY260908C00775000", underlying="SPY", right="call",
+        strike=775.0, expiry=dt.date(2026, 9, 8), dte=6, bid=bid, ask=ask,
+        open_interest=5000, iv=0.2, delta=0.2, gamma=0.01, theta=-0.05, vega=0.1)
+    for bid, ask in ((0.29, 0.34), (0.36, 0.41), (0.09, 0.14), (0.41, 0.46)):
+        r = row(bid, ask)
+        assert _spread_ok(r), (
+            "%.2f/%.2f is a five-cent spread and must pass (raw %r)"
+            % (bid, ask, r.spread))

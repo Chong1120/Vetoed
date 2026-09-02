@@ -329,6 +329,10 @@
   .rejnum { position: relative; min-width: 38px; text-align: right;
             font-size: 11.5px; color: var(--text-dim); font-weight: 600; }
   .rejlab { position: relative; font-size: 11.5px; color: var(--muted); }
+  /* A count is a statistic; a named contract with the number that failed is
+     the agent showing its work. Indented under the reason it belongs to. */
+  .rejeg { margin: 1px 0 5px 50px; display: flex; flex-direction: column;
+           gap: 1px; font-size: 10.8px; color: var(--muted); opacity: .78; }
 
   .empty {
     color: var(--muted); padding: 30px 20px; text-align: center; font-size: 13px;
@@ -998,6 +1002,25 @@ function noteSlot(leg, state) {
    which is a dozen calls nobody had asked for - slow, and paid for whether or
    not a single one was read. It is a button now: nothing is requested until
    someone wants it, and the answer is cached so reopening is instant. */
+const NOTE_INFLIGHT = new Map();       // leg -> promise, so hover never double-asks
+
+/* One request per position, ever, however many things ask for it.
+   Writing a note costs the model about six seconds. Asking when the pointer
+   arrives rather than when the button is pressed spends that wait on the
+   reader's way to the click, and the promise is shared so a mouse sweeping
+   across several rows cannot start the same fetch twice. */
+function noteFor(leg) {
+  if (NOTES.has(leg)) return Promise.resolve(NOTES.get(leg));
+  if (NOTE_INFLIGHT.has(leg)) return NOTE_INFLIGHT.get(leg);
+  const p = fetch(NOTE_API + "?leg=" + encodeURIComponent(leg))
+    .then(r => r.ok ? r.json() : null)
+    .then(j => (j && j.explanation) ? j.explanation : null)
+    .catch(() => null)
+    .then(t => { NOTES.set(leg, t); NOTE_INFLIGHT.delete(leg); return t; });
+  NOTE_INFLIGHT.set(leg, p);
+  return p;
+}
+
 async function askAgent(btn) {
   const wrap = btn.parentElement, chat = wrap.querySelector(".ai-chat");
   const leg = btn.dataset.note, open = chat.hidden;
@@ -1006,24 +1029,15 @@ async function askAgent(btn) {
   wrap.classList.toggle("open", open);
   if (!open || chat.dataset.filled) return;
 
-  chat.innerHTML = `<div class="ai-msg you">${esc(btn.dataset.q)}</div>
-    <div class="ai-row"><span class="ai-av" aria-hidden="true">V</span>
+  const head = `<div class="ai-msg you">${esc(btn.dataset.q)}</div>`;
+  chat.innerHTML = head + `<div class="ai-row"><span class="ai-av" aria-hidden="true">V</span>
       <div class="ai-msg bot typing"><i></i><i></i><i></i></div></div>`;
 
-  let text = NOTES.get(leg);
-  if (text === undefined) {
-    try {
-      const r = await fetch(NOTE_API + "?leg=" + encodeURIComponent(leg));
-      const j = r.ok ? await r.json() : null;
-      text = (j && j.explanation) ? j.explanation : null;
-    } catch (_) { text = null; }
-    NOTES.set(leg, text);
-  }
+  const text = await noteFor(leg);
   chat.dataset.filled = "1";
   // No note is a stated absence, not a blank panel. The row's numbers were
   // never dependent on this and are all still there.
-  chat.innerHTML = `<div class="ai-msg you">${esc(btn.dataset.q)}</div>
-    <div class="ai-row"><span class="ai-av" aria-hidden="true">V</span>
+  chat.innerHTML = head + `<div class="ai-row"><span class="ai-av" aria-hidden="true">V</span>
       <div class="ai-msg bot">${text ? esc(text)
         : "I can't reach my reasoning for this position right now."}</div></div>
     <div class="ai-foot">written by the agent from its own journal entry</div>`;
@@ -1032,6 +1046,12 @@ async function askAgent(btn) {
 function wireNotes(root) {
   for (const b of root.querySelectorAll(".ai-btn")) {
     b.addEventListener("click", () => askAgent(b));
+    // Warm it on approach. pointerenter covers mouse and pen; pointerdown
+    // fires before click on touch, where there is no hover to work with.
+    const warm = () => noteFor(b.dataset.note);
+    b.addEventListener("pointerenter", warm);
+    b.addEventListener("pointerdown", warm);
+    b.addEventListener("focus", warm);
   }
 }
 
@@ -1461,7 +1481,10 @@ function render() {
               <span class="rejbar" style="width:${worst ? Math.max(3, r.count / worst * 100) : 0}%"></span>
               <span class="rejnum mono">${grp(r.count)}</span>
               <span class="rejlab">${esc(r.label)}</span>
-            </div>`).join("")}
+            </div>
+            ${(r.examples || []).length ? `<div class="rejeg">
+              ${r.examples.map(x => `<div class="mono">${esc(x)}</div>`).join("")}
+            </div>` : ""}`).join("")}
           </div>
           ${(e.near_misses || []).length ? `<details style="margin-top:7px">
             <summary class="sub dim" style="cursor:pointer">

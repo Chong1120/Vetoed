@@ -274,7 +274,7 @@ class Rejections:
     runs exactly as it did before.
     """
 
-    __slots__ = ("tally", "near", "measured")
+    __slots__ = ("tally", "near", "examples", "measured")
 
     # Ordered worst-to-best so the log reads as a funnel.
     LABELS = {
@@ -293,15 +293,27 @@ class Rejections:
         "guardrail_banned": "underlying suspended by an adaptive guardrail",
     }
 
+    EXAMPLES_PER_REASON = 3
+
     def __init__(self):
         self.tally: dict[str, int] = {}
         self.near: list[dict] = []
+        self.examples: dict[str, list[str]] = {}
         self.measured = 0
 
-    def add(self, reason: str, detail: dict | None = None):
+    def add(self, reason: str, detail: dict | None = None,
+            example: str | None = None):
         self.tally[reason] = self.tally.get(reason, 0) + 1
         if detail:
             self.near.append(dict(detail, reason=reason))
+        # "1,029 rejected on open interest" is a statistic. "SPY 645 PUT -
+        # open interest 87, floor 500" is the agent showing its work. A few
+        # per reason is enough to make the count concrete, and capping it
+        # keeps a cycle's tally small enough to commit every ten minutes.
+        if example:
+            got = self.examples.setdefault(reason, [])
+            if len(got) < self.EXAMPLES_PER_REASON and example not in got:
+                got.append(example)
 
     def to_dict(self) -> dict:
         """Counts plus the handful of spreads that came closest to passing.
@@ -317,7 +329,8 @@ class Rejections:
             "measured": self.measured,
             "rejected": sum(self.tally.values()),
             "by_reason": [
-                {"reason": k, "label": self.LABELS.get(k, k), "count": v}
+                {"reason": k, "label": self.LABELS.get(k, k), "count": v,
+                 "examples": self.examples.get(k, [])}
                 for k, v in sorted(self.tally.items(), key=lambda kv: -kv[1])
             ],
             "near_misses": near,
@@ -329,7 +342,18 @@ class Rejections:
 # --------------------------------------------------------------------------- #
 
 def _spread_ok(row: OptionRow) -> bool:
-    return row.spread <= MAX_SPREAD_ABS or row.spread_pct <= MAX_SPREAD_PCT
+    """Tradeable if the spread is narrow in cash OR narrow relative to price.
+
+    Rounded before comparing, because a five-cent spread is not reliably five
+    cents in binary. 0.34 - 0.29 lands on 0.050000000000000044 and failed the
+    cap, while 0.41 - 0.36 lands on 0.049999999999999990 and passed it - the
+    same five cents, admitted or refused on nothing but which way the float
+    happened to fall. Eight of 2,724 contracts in one live screen were being
+    turned away by that. Rounding to six places is far finer than any real
+    quote increment, so it changes nothing except the noise.
+    """
+    return (round(row.spread, 6) <= MAX_SPREAD_ABS
+            or row.spread_pct <= MAX_SPREAD_PCT)
 
 
 def _oi_floor(underlying: str) -> int:
@@ -348,6 +372,33 @@ def _oi_floor(underlying: str) -> int:
     """
     from agent.risk import MIN_OPEN_INTEREST
     return max(MIN_OI.get(underlying, MIN_OI_DEFAULT), MIN_OPEN_INTEREST)
+
+
+def _name(row: OptionRow) -> str:
+    """"SPY 645 PUT 4DTE" - what a reader can actually look up."""
+    strike = ("%g" % row.strike)
+    return "%s %s %s %dDTE" % (row.underlying, strike, row.right.upper(), row.dte)
+
+
+def _spread_name(short: OptionRow, long_strike: float) -> str:
+    """"SPY 771/776 CALL 2DTE" - both legs, the way a spread is quoted."""
+    return "%s %g/%g %s %dDTE" % (short.underlying, short.strike, long_strike,
+                                  short.right.upper(), short.dte)
+
+
+def _leg_example(row: OptionRow, reason: str, min_bid: float) -> str:
+    """The measurement that failed, next to the floor it failed against."""
+    if reason == "premium_too_small":
+        return "%s - bid $%.2f, floor $%.2f" % (_name(row), row.bid, min_bid)
+    if reason == "oi_too_thin":
+        return "%s - open interest %d, floor %d" % (
+            _name(row), row.open_interest, _oi_floor(row.underlying))
+    # Both halves of the gate, because it passes on EITHER. Shown to one
+    # decimal: 10.4%% rounded to "10%%" against a "10%%" cap read as though it
+    # should have been allowed through.
+    return "%s - bid-ask $%.3f (%.1f%% of mid), needs under $%.3f or %.0f%%" % (
+        _name(row), row.spread, row.spread_pct * 100.0,
+        MAX_SPREAD_ABS, MAX_SPREAD_PCT * 100.0)
 
 
 def _leg_reason(row: OptionRow, min_bid: float) -> str | None:
@@ -380,10 +431,11 @@ def _long_leg_ok(row: OptionRow) -> bool:
 
 # --------------------------------------------------------------------------- #
 
-def _note(rejects: "Rejections | None", reason: str, detail: dict | None = None):
+def _note(rejects: "Rejections | None", reason: str, detail: dict | None = None,
+          example: str | None = None):
     """Record a rejection if anyone is collecting them."""
     if rejects is not None:
-        rejects.add(reason, detail)
+        rejects.add(reason, detail, example)
 
 
 def _build_spreads(snap: MarketSnapshot, right: str,
@@ -402,7 +454,7 @@ def _build_spreads(snap: MarketSnapshot, right: str,
         if reason is None:
             shorts.append(r)
         elif rejects is not None:
-            rejects.add(reason)
+            rejects.add(reason, example=_leg_example(r, reason, MIN_SHORT_BID))
     longs = {(str(r.expiry), r.strike): r for r in rows if _long_leg_ok(r)}
 
     kind = "put_credit" if right == "put" else "call_credit"
@@ -412,7 +464,8 @@ def _build_spreads(snap: MarketSnapshot, right: str,
         if short.delta is None:
             continue
         if not (SHORT_DELTA_MIN <= short.abs_delta <= SHORT_DELTA_MAX):
-            _note(rejects, "delta_out_of_band")
+            _note(rejects, "delta_out_of_band", example="%s - delta %.2f, band %.2f-%.2f"
+                  % (_name(short), short.abs_delta, SHORT_DELTA_MIN, SHORT_DELTA_MAX))
             continue
         if right == "put" and short.strike >= spot:
             _note(rejects, "wrong_side_of_spot")
@@ -434,7 +487,10 @@ def _build_spreads(snap: MarketSnapshot, right: str,
                 continue
             ratio = credit / width
             if not (MIN_CREDIT_RATIO <= ratio <= MAX_CREDIT_RATIO):
-                _note(rejects, "credit_ratio")
+                _note(rejects, "credit_ratio",
+                      example="%s - credit %.0f%% of width, band %.0f-%.0f%%"
+                      % (_spread_name(short, long_strike), ratio * 100.0,
+                         MIN_CREDIT_RATIO * 100.0, MAX_CREDIT_RATIO * 100.0))
                 continue
 
             max_profit = credit * 100.0
@@ -455,7 +511,10 @@ def _build_spreads(snap: MarketSnapshot, right: str,
             ev_rw, pop_rw = spread_ev(spot, short.strike, long_strike,
                                       credit, vol, years, right)
             if math.isnan(ev_rw) or ev_rw < MIN_EV_RW:
-                _note(rejects, "ev_too_low")
+                _note(rejects, "ev_too_low",
+                      example="%s - expected value $%.2f, floor $%.2f"
+                      % (_spread_name(short, long_strike),
+                         0.0 if math.isnan(ev_rw) else ev_rw, MIN_EV_RW))
                 continue
 
             # --- valuation B: priced at the market's IMPLIED volatility --- #
@@ -489,7 +548,9 @@ def _build_spreads(snap: MarketSnapshot, right: str,
             if vrp_edge < min_vrp:
                 # Fully measured and still declined - the numbers are worth
                 # keeping, because this is the gate that does the real work.
-                _note(rejects, "edge_too_low", {
+                _note(rejects, "edge_too_low", example=(
+                    "%s - edge $%.2f, floor $%.2f"
+                    % (_spread_name(short, long_strike), vrp_edge, min_vrp)), detail={
                     "underlying": snap.symbol, "kind": kind,
                     "short_strike": short.strike, "long_strike": long_strike,
                     "dte": short.dte, "vrp_edge": round(vrp_edge, 2),
