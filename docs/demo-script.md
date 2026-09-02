@@ -104,19 +104,46 @@ It can learn, but it can't learn its way around the risk controls.
 
 <break time="1.0s" />
 
-[11a — screenshot 1: equity, funnel, volatility]
-And this runs unattended. A scheduled trigger starts one long session each morning, and inside it the agent re-screens every ten minutes and looks for a new position every thirty, with nothing of mine switched on. Every cycle reconciles against the broker first, so a restart can't duplicate a position.
+[11 — LIVE DASHBOARD. Switch to the browser here. Four stops, in this order.
+Do not visit Volatility: slides 4 and 5 already covered implied versus realised,
+and the panel only repeats it.]
 
-This is the dashboard. Read the funnel downward. Eight spreads cleared the edge gate. One was selected. One survived all eight risk gates. And zero were sent, because the market was closed. Every row says dry run, and I've left it that way.
+[11a — Equity. Point at the market badge and the last-run time first: that is
+the proof this is running, not a recording.]
+This is the dashboard, live. The bar reads market open and the agent last ran
+minutes ago — nothing here is staged. It started at one hundred thousand
+dollars and stands at ONE HUNDRED AND ONE THOUSAND NINE HUNDRED. Hover the
+curve and it reports the account at that moment against its own high-water
+mark, so a fall from a peak is the gap beneath the line.
 
-<break time="0.5s" />
+<break time="0.7s" />
 
-[11b — screenshot 2: the decisions table]
-This is every decision it has made, including the ones it refused.
+[11b — Decisions, Screened out tab. This is the differentiator. Let the numbers
+land before speaking.]
+Now the part I most want you to see. On this cycle the agent measured the whole
+option chain across four underlyings and rejected FOURTEEN HUNDRED AND
+NINETY-EIGHT spreads. Open it up and every rejection is counted by the reason
+that stopped it, with the actual contracts named: open interest below the
+liquidity floor, premium too small to be worth the risk, delta outside the
+band. It is not an agent looking for a reason to trade. It spends almost all of
+its time declining.
 
-Top row, the language model choosing. Apple, the three ten put credit spread, forty two dollars of measured edge, approved at twelve contracts.
+<break time="0.7s" />
 
-The row underneath is the one I'd point a judge at. The model call failed, a four twenty two, logged right there in the open. The agent didn't stop and it didn't guess. It fell back to arithmetic and reached the same spread. That's the fallback, firing for real.
+[11c — Closed positions. Open one AI reasoning panel and let it type.]
+Four positions have closed, every one at a profit, two thousand and fifty-four
+dollars realised. This IWM spread was bought back at fifty-four percent of the
+premium it collected — the rule is take profit at half, and the agent acted on
+it without me. And this is it explaining itself: press AI reasoning and it
+writes the technical case from its own journal entry — what it measured, and
+what it did about it. Every figure is quoted from the record; it is not allowed
+to calculate.
+
+<break time="0.7s" />
+
+[11d — Open positions. Brief. Then back to the deck.]
+Five spreads are open against a twenty-five percent cap on capital at risk.
+Real exposure, live — and every one cleared eight risk gates before it existed.
 
 <break time="1.0s" />
 
@@ -192,8 +219,8 @@ the tone doesn't drift.
 | 3:59 | 8 | Risk |
 | 4:23 | 9 | It says no |
 | 4:47 | 10 | Learning on a leash |
-| 5:20 | — | **Screenshot 1**, then **screenshot 2** (33s + 34s) |
-| 6:27 | 12 | Limits and close |
+| 5:20 | — | **LIVE DASHBOARD** — equity, screened out, closed + AI reasoning, open (~1:40) |
+| 7:00 | 12 | Limits and close |
 
 Derived from word counts at 158 wpm plus the break tags. Your generated audio
 will differ by a few seconds — line the slides up to what you actually get.
