@@ -244,6 +244,27 @@ async function checkAgentPanel(reply, expect, label) {
   C2.range = "all";
   ctx.chart(data.equity, false);
 
+  // A curve that disagrees with the account must never reach the chart.
+  // This is the $202,226 case: Alpaca returned base + equity, the page drew
+  // it, and told the reader the account had returned 102%.
+  {
+    const journal = data.equity;
+    const doubled = journal.map(r => ({ t: Math.floor(Date.parse(r.ts) / 1000),
+                                        equity: r.equity + 100000 }));
+    const bad = ctx.pickSeries({ equity: 101952, equity_series: doubled }, journal);
+    if (bad !== journal) {
+      console.error("PAGE ACCEPTED an equity curve that contradicts the account");
+      process.exit(1);
+    }
+    const good = journal.map(r => ({ t: Math.floor(Date.parse(r.ts) / 1000),
+                                     equity: r.equity }));
+    const okv = journal[journal.length - 1].equity;
+    if (ctx.pickSeries({ equity: okv, equity_series: good }, journal) !== good) {
+      console.error("PAGE REJECTED a broker curve that agrees with the account");
+      process.exit(1);
+    }
+  }
+
   // The very first point cannot have made money: it IS the starting balance.
   // Measuring profit from the first point IN VIEW rather than from inception
   // made the tooltip announce a six-figure gain at the moment the account

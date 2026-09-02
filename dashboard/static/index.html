@@ -769,6 +769,31 @@ function kpis(s, orders, broker, live) {
    in `t`. Reading r.ts alone meant a broker-sourced curve had no axis dates,
    an empty crosshair heading, and range presets that silently matched nothing
    and returned everything - three symptoms of one missing field. */
+/* The curve has to agree with the number printed above it.
+   Alpaca's portfolio history, on this paper account, returns the base value
+   ADDED to the equity: base 100,000 plus an account of 102,287 came back as
+   202,287, and the chart drew it and reported a 102% return. The account
+   endpoint is the authority on what the account is worth; a history that
+   disagrees with it by more than 2% is not a denser view of the same truth,
+   it is a different number, and it is dropped for the journal's own snapshots
+   - which are recorded from that same authoritative endpoint.
+
+   This check lives in the page as well as in the proxy on purpose. The page
+   is served from GitHub Pages and the proxy from Vercel, they deploy
+   independently, and the proxy fix sat undeployed for half an hour while the
+   site kept showing $202,226. Whichever ships first, the reader stops seeing
+   a number the account never held. */
+function pickSeries(live, journalSeries) {
+  const s = live && live.equity_series;
+  if (!Array.isArray(s) || s.length < 2) return journalSeries;
+  const now = live && live.equity != null ? Number(live.equity) : null;
+  if (now && now > 0) {
+    const last = Number(s[s.length - 1].equity);
+    if (!isFinite(last) || Math.abs(last - now) / now > 0.02) return journalSeries;
+  }
+  return s;
+}
+
 function tsOf(r) {
   if (!r) return "";
   if (r.ts) return r.ts;
@@ -1971,8 +1996,7 @@ async function refresh() {
       } catch (_) { /* stays null; the snapshot path is always valid */ }
     }
     const held = live ? live.positions : bp;
-    const series = (live && live.equity_series && live.equity_series.length > 1)
-      ? live.equity_series : e;
+    const series = pickSeries(live, e);
     status(s, r, live); kpis(s, o, held, live);
     chart(series, series !== e); funnel(r, d, o, sel);
     // Spot prices come from the screening context of the most recent cycle
