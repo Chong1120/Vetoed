@@ -43,8 +43,26 @@ def _get(path: str, key: str, secret: str):
         return json.loads(fh.read().decode("utf-8"))
 
 
-def _series(hist):
-    """Timestamped equity points, with the padding removed."""
+def _series(hist, equity_now=None):
+    """Timestamped equity points, padding removed, checked against the account.
+
+    The account endpoint is the authority on what the account is worth. This
+    history is a convenience - denser points for a nicer curve - and on this
+    paper account it does not agree with the authority: with a base value of
+    100,000 it reported 202,287 while the account said 101,952, having added
+    the base to the equity. The dashboard drew that faithfully and told the
+    reader the account had returned 102%.
+
+    So the series has to agree with the account before it is allowed on the
+    page. If the final point is more than 2% from the live figure, the whole
+    series is refused and the caller falls back to the journal's own snapshots,
+    which are recorded from this same authoritative endpoint. A curve that
+    contradicts the number printed above it is worse than a coarser curve.
+
+    Each point also carries an ISO `ts` beside the epoch `t`. The chart reads
+    ts - axis labels, the crosshair readout and the range presets all parse it
+    - and a series carrying only `t` silently lost its dates and its ranges.
+    """
     if not isinstance(hist, dict):
         return []
     ts = hist.get("timestamp") or []
@@ -54,7 +72,18 @@ def _series(hist):
         n = _num(v)
         if n is None or n <= 0:             # padding, not a reading
             continue
-        out.append({"t": int(t), "equity": n})
+        try:
+            iso = datetime.datetime.fromtimestamp(
+                int(t), datetime.timezone.utc).isoformat(timespec="seconds")
+        except (ValueError, OSError, OverflowError):
+            continue
+        out.append({"t": int(t), "ts": iso, "equity": n})
+
+    live = _num(equity_now)
+    if out and live and live > 0:
+        drift = abs(out[-1]["equity"] - live) / live
+        if drift > 0.02:
+            return []                       # disagrees with the account: refuse
     return out
 
 
@@ -116,7 +145,7 @@ def build():
         "buying_power": _num(acct.get("buying_power")),
         # Alpaca pads the series with zeros where the account did not exist
         # yet; plotting those draws a cliff to the axis that never happened.
-        "equity_series": _series(hist),
+        "equity_series": _series(hist, acct.get("equity")),
         "market_open": (clock or {}).get("is_open"),
         "next_open": (clock or {}).get("next_open"),
         "next_close": (clock or {}).get("next_close"),

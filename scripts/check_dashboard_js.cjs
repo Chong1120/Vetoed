@@ -218,8 +218,31 @@ async function checkAgentPanel(reply, expect, label) {
   // otherwise "24H" legitimately equals "All" and the check would be a lie.
   // Equality is the failure worth catching: a range function that quietly
   // returns everything looks exactly like one that works.
-  const span = Date.parse(data.equity[data.equity.length - 1].ts)
-             - Date.parse(data.equity[0].ts);
+  const span = Date.parse(ctx.tsOf(data.equity[data.equity.length - 1]))
+             - Date.parse(ctx.tsOf(data.equity[0]));
+
+  // The broker's history uses epoch `t`, the journal an ISO `ts`. A chart that
+  // reads only one loses its axis dates and its ranges against the other, and
+  // renders perfectly while doing so - so drive it with the broker's shape too.
+  const epoch = data.equity.map(r => ({
+    t: Math.floor(Date.parse(r.ts) / 1000), equity: r.equity,
+  }));
+  ctx.chart(epoch, true);
+  const esvg = els.chart.innerHTML;
+  if (/>\s*(Invalid|NaN|undefined)/.test(esvg) || !/<text class="axis-text" x="62"/.test(esvg)) {
+    console.error("CHART lost its dates on an epoch-timestamped series");
+    process.exit(1);
+  }
+  const C2 = vm.runInContext("CHART", ctx);
+  C2.range = "1d"; ctx.drawChart();
+  const eday = C2.geom ? C2.geom.rows.length : 0;
+  if (span > 864e5 && eday >= epoch.length) {
+    console.error("CHART RANGE ignored epoch timestamps: all=" + epoch.length
+                  + " 1d=" + eday);
+    process.exit(1);
+  }
+  C2.range = "all";
+  ctx.chart(data.equity, false);
   if (!full || !day) {
     console.error("CHART RANGE produced nothing: all=" + full + " 1d=" + day);
     process.exit(1);

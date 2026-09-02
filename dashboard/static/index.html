@@ -70,27 +70,46 @@
   [hidden] { display: none !important; }
 
   /* Jump bar. The decision log is the longest panel and sits last, so reaching
-     it from the equity curve meant scrolling past everything between. Sticky,
-     because the reader wants it most when they are already deep in the page.
-     scroll-margin-top on the targets keeps a heading from landing underneath
-     the bar that just scrolled the reader to it. */
+     it from the equity curve meant scrolling past everything between.
+     Deliberately OPAQUE: it was translucent with a blur, and scrolling the
+     equity card underneath left its labels sitting on the chart's own fill,
+     unreadable. A navigation bar has to be legible over every pixel that can
+     pass beneath it, which a wash over arbitrary content cannot guarantee.
+     It also carries the live figure, so the number a reader most wants is
+     never further away than the bar itself. */
   .jump {
-    position: sticky; top: 0; z-index: 30;
-    display: flex; gap: 6px; flex-wrap: wrap;
-    padding: 9px 22px; background: var(--bg);
-    border-bottom: 1px solid var(--line);
-    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 60;
+    display: flex; align-items: center; gap: 18px;
+    padding: 0 22px; height: 52px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    box-shadow: 0 2px 14px rgba(0,0,0,.45);
   }
+  .jump-mark {
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    letter-spacing: .16em; color: var(--accent); flex: 0 0 auto;
+  }
+  .jump-links { display: flex; gap: 4px; flex: 1 1 auto; flex-wrap: wrap; }
   .jump a {
-    padding: 5px 13px; border-radius: 999px; text-decoration: none;
-    font-size: 11.5px; color: var(--muted); border: 1px solid transparent;
-    transition: color .15s, border-color .15s, background .15s;
+    padding: 7px 15px; border-radius: 7px; text-decoration: none;
+    font-size: 12.5px; color: var(--text-dim); border: 1px solid transparent;
+    white-space: nowrap; transition: color .15s, background .15s;
   }
-  .jump a:hover { color: var(--text); border-color: var(--line); }
-  .jump a.here { color: var(--accent); border-color: var(--accent-dk);
-                 background: var(--raised); }
+  .jump a:hover { color: var(--text); background: var(--raised); }
+  .jump a.here {
+    color: var(--accent); background: var(--raised);
+    border-color: var(--accent-dk); font-weight: 600;
+  }
   .jump a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  main > section, main > .kpis { scroll-margin-top: 58px; }
+  .jump-live {
+    display: flex; align-items: baseline; gap: 9px; flex: 0 0 auto;
+    font-family: var(--mono); font-size: 12.5px; white-space: nowrap;
+  }
+  .jump-live .eq { color: var(--text); font-weight: 600; }
+  @media (max-width: 700px) {
+    .jump { height: auto; padding: 9px 14px; flex-wrap: wrap; gap: 10px; }
+    .jump-mark, .jump-live { display: none; }
+  }
+  main > section, main > .kpis { scroll-margin-top: 66px; }
   html { scroll-behavior: smooth; }
   @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
@@ -454,11 +473,15 @@
 </header>
 
 <nav class="jump" id="jump" aria-label="Jump to section">
-  <a href="#sec-equity">Equity</a>
-  <a href="#sec-vol">Volatility</a>
-  <a href="#sec-open">Open</a>
-  <a href="#sec-closed">Closed</a>
-  <a href="#sec-decisions">Decisions</a>
+  <span class="jump-mark">VETOED</span>
+  <div class="jump-links">
+    <a href="#sec-equity">Equity</a>
+    <a href="#sec-vol">Volatility</a>
+    <a href="#sec-open">Open</a>
+    <a href="#sec-closed">Closed</a>
+    <a href="#sec-decisions">Decisions</a>
+  </div>
+  <div class="jump-live" id="jump-live"></div>
 </nav>
 
 <main>
@@ -675,6 +698,9 @@ function kpis(s, orders, broker, live) {
   // One equity figure feeds both cells. When a live source answers, the
   // journal's older reading is not mixed in.
   const equityNow = (live && live.equity != null) ? Number(live.equity) : latest;
+  // Same figure to the bar, so the two can never disagree.
+  jumpLive(equityNow, (live && live.equity != null && live.last_equity != null)
+    ? Number(live.equity) - Number(live.last_equity) : chg);
   const liveChg = (start != null && equityNow != null) ? equityNow - start : chg;
   const liveChgPct = (start && liveChg != null) ? liveChg / start : chgPct;
 
@@ -738,6 +764,18 @@ function kpis(s, orders, broker, live) {
    the same scale as equity, so it shares the one y-axis. Drawdown as a percent
    would need its own scale, and a second y-axis is the one thing a chart must
    never have; it lives in the readout and the stat strip instead. */
+/* One accessor for the timestamp, because the two sources disagree on the
+   field. The journal writes an ISO `ts`; Alpaca's history writes epoch seconds
+   in `t`. Reading r.ts alone meant a broker-sourced curve had no axis dates,
+   an empty crosshair heading, and range presets that silently matched nothing
+   and returned everything - three symptoms of one missing field. */
+function tsOf(r) {
+  if (!r) return "";
+  if (r.ts) return r.ts;
+  if (typeof r.t === "number") return new Date(r.t * 1000).toISOString();
+  return "";
+}
+
 const RANGES = [["all", "All"], ["30d", "30D"], ["7d", "7D"], ["1d", "24H"]];
 let CHART = { rows: [], range: "all", fromBroker: false, geom: null };
 
@@ -773,7 +811,7 @@ function wireCrosshair() {
       row.appendChild(a); row.appendChild(b); tip.appendChild(row);
     };
     const when = document.createElement("div");
-    when.className = "twhen"; when.textContent = shortTs(G.rows[i].ts) + " UTC";
+    when.className = "twhen"; when.textContent = shortTs(tsOf(G.rows[i])) + " UTC";
     tip.appendChild(when);
     add("equity", money(v), "");
     add("vs start", (chg >= 0 ? "+" : "") + money(chg), chg >= 0 ? "c-profit" : "c-loss");
@@ -810,10 +848,10 @@ function wireCrosshair() {
 function chartRange(rows, range) {
   if (range === "all" || !rows.length) return rows;
   const days = { "30d": 30, "7d": 7, "1d": 1 }[range] || 0;
-  const end = Date.parse(rows[rows.length - 1].ts);
+  const end = Date.parse(tsOf(rows[rows.length - 1]));
   if (!days || isNaN(end)) return rows;
   const cut = end - days * 864e5;
-  const kept = rows.filter(r => Date.parse(r.ts) >= cut);
+  const kept = rows.filter(r => Date.parse(tsOf(r)) >= cut);
   // Never render an empty chart because a preset outran the data. Two points
   // is the minimum that draws a line; below that, show everything.
   return kept.length >= 2 ? kept : rows;
@@ -878,8 +916,8 @@ function drawChart() {
     labels += `<text class="axis-text" x="${L - 8}" y="${yy + 3.5}" text-anchor="end">`
             + `${Math.round(v).toLocaleString()}</text>`;
   }
-  const first = shortTs(rows[0].ts).slice(0, 10);
-  const lastT = shortTs(rows[rows.length - 1].ts).slice(0, 10);
+  const first = shortTs(tsOf(rows[0])).slice(0, 10);
+  const lastT = shortTs(tsOf(rows[rows.length - 1])).slice(0, 10);
 
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   svg.innerHTML = `
@@ -1298,6 +1336,19 @@ async function askAgent(btn) {
    is what makes it a position indicator. rootMargin pulls the trigger line to
    just under the sticky bar, so a section counts as current when its heading
    reaches the bar rather than when its last pixel leaves the viewport. */
+/* The live figure in the bar. Fed from the same value the KPI row uses, so
+   the two can never disagree - a header that quietly drifts from the panel
+   below it is worse than a header with nothing in it. */
+function jumpLive(equity, dayPnl) {
+  const el = document.getElementById("jump-live");
+  if (!el) return;
+  if (equity == null) { el.textContent = ""; return; }
+  const d = Number(dayPnl);
+  el.innerHTML = `<span class="eq">${money(equity)}</span>`
+    + (isFinite(d) ? `<span class="${d >= 0 ? "c-profit" : "c-loss"}">`
+        + `${d >= 0 ? "+" : ""}${money(d)} today</span>` : "");
+}
+
 function wireJump() {
   const bar = document.getElementById("jump");
   if (!bar || typeof IntersectionObserver !== "function") return;
