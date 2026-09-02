@@ -393,7 +393,8 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
             is_open, ctx.get("feed"), equity, acct_state.day_pnl,
             acct_state.halted, len(cands),
             note="; ".join(closed + rails.notes + rec.corrections), context=ctx,
-            shortlist=cands)
+            shortlist=cands,
+            eliminated=ctx.get("eliminated"))
 
         if not cands:
             journal.record_decision(run_id, None, None, None,

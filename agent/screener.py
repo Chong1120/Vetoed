@@ -255,6 +255,76 @@ def spread_ev(spot: float, k_short: float, k_long: float, credit: float,
 
 
 # --------------------------------------------------------------------------- #
+# rejection recording
+# --------------------------------------------------------------------------- #
+
+class Rejections:
+    """Why each candidate was turned down, counted as the screener works.
+
+    The decision log could only ever show one reason a trade did not happen -
+    CONCENTRATION, the position limit - because that is the only veto raised
+    after a candidate has been nominated. Everything the screener threw out
+    beforehand was discarded silently, so the agent read as one that always
+    wants to trade and is only ever held back by a cap. The opposite is true:
+    on a normal cycle it measures a few hundred spreads and rejects almost all
+    of them on quality, and that is the part worth seeing.
+
+    Recording is entirely passive. Nothing here participates in the decision -
+    the collector is optional, defaults to absent, and when absent the screener
+    runs exactly as it did before.
+    """
+
+    __slots__ = ("tally", "near", "measured")
+
+    # Ordered worst-to-best so the log reads as a funnel.
+    LABELS = {
+        "spread_too_wide": "bid-ask spread too wide to trade",
+        "oi_too_thin": "open interest below the liquidity floor",
+        "premium_too_small": "premium too small to be worth the risk",
+        "delta_out_of_band": "short strike delta outside the target band",
+        "wrong_side_of_spot": "strike on the wrong side of the price",
+        "no_long_leg": "no protective long leg available at any width",
+        "credit_ratio": "credit versus width outside the accepted band",
+        "ev_too_low": "expected value below the $%.2f floor" % MIN_EV_RW,
+        "no_implied_vol": "no implied volatility quoted - edge unmeasurable",
+        "edge_too_low": "measured edge below the $%.2f minimum" % MIN_VRP_EDGE,
+        # Raised by adapt.py after a loss, so the screener tightens itself.
+        "guardrail_delta": "delta band narrowed by an adaptive guardrail",
+        "guardrail_banned": "underlying suspended by an adaptive guardrail",
+    }
+
+    def __init__(self):
+        self.tally: dict[str, int] = {}
+        self.near: list[dict] = []
+        self.measured = 0
+
+    def add(self, reason: str, detail: dict | None = None):
+        self.tally[reason] = self.tally.get(reason, 0) + 1
+        if detail:
+            self.near.append(dict(detail, reason=reason))
+
+    def to_dict(self) -> dict:
+        """Counts plus the handful of spreads that came closest to passing.
+
+        A bare tally says the agent rejected 312 spreads and shows none of
+        them, which is not much more convincing than showing nothing. The
+        near-misses are the ones that were fully measured and still declined,
+        so they carry the actual numbers - this edge, against this floor.
+        """
+        near = sorted((n for n in self.near if n.get("vrp_edge") is not None),
+                      key=lambda n: -n["vrp_edge"])[:6]
+        return {
+            "measured": self.measured,
+            "rejected": sum(self.tally.values()),
+            "by_reason": [
+                {"reason": k, "label": self.LABELS.get(k, k), "count": v}
+                for k, v in sorted(self.tally.items(), key=lambda kv: -kv[1])
+            ],
+            "near_misses": near,
+        }
+
+
+# --------------------------------------------------------------------------- #
 # leg-level filters
 # --------------------------------------------------------------------------- #
 
@@ -280,6 +350,22 @@ def _oi_floor(underlying: str) -> int:
     return max(MIN_OI.get(underlying, MIN_OI_DEFAULT), MIN_OPEN_INTEREST)
 
 
+def _leg_reason(row: OptionRow, min_bid: float) -> str | None:
+    """Why this leg is untradeable, or None if it is fine.
+
+    Mirrors the boolean gates below exactly; it exists so a rejection can be
+    named rather than merely counted. First failure wins, which keeps one
+    unusable leg from inflating three separate tallies.
+    """
+    if row.bid < min_bid:
+        return "premium_too_small"
+    if row.open_interest < _oi_floor(row.underlying):
+        return "oi_too_thin"
+    if not _spread_ok(row):
+        return "spread_too_wide"
+    return None
+
+
 def _short_leg_ok(row: OptionRow) -> bool:
     return (row.bid >= MIN_SHORT_BID
             and row.open_interest >= _oi_floor(row.underlying)
@@ -294,17 +380,30 @@ def _long_leg_ok(row: OptionRow) -> bool:
 
 # --------------------------------------------------------------------------- #
 
+def _note(rejects: "Rejections | None", reason: str, detail: dict | None = None):
+    """Record a rejection if anyone is collecting them."""
+    if rejects is not None:
+        rejects.add(reason, detail)
+
+
 def _build_spreads(snap: MarketSnapshot, right: str,
-                   min_vrp: float = MIN_VRP_EDGE) -> list[SpreadCandidate]:
+                   min_vrp: float = MIN_VRP_EDGE,
+                   rejects: "Rejections | None" = None) -> list[SpreadCandidate]:
     """Pair every viable short leg with a protective long leg.
 
     `min_vrp` is the floor on measured volatility risk premium. Tests lower it
     to inspect the raw maths; production keeps the default.
     """
     spot, vol = snap.spot, snap.realized_vol
-    shorts = [r for r in snap.rows if r.right == right and _short_leg_ok(r)]
-    longs = {(str(r.expiry), r.strike): r
-             for r in snap.rows if r.right == right and _long_leg_ok(r)}
+    rows = [r for r in snap.rows if r.right == right]
+    shorts = []
+    for r in rows:
+        reason = _leg_reason(r, MIN_SHORT_BID)
+        if reason is None:
+            shorts.append(r)
+        elif rejects is not None:
+            rejects.add(reason)
+    longs = {(str(r.expiry), r.strike): r for r in rows if _long_leg_ok(r)}
 
     kind = "put_credit" if right == "put" else "call_credit"
     out: list[SpreadCandidate] = []
@@ -313,10 +412,13 @@ def _build_spreads(snap: MarketSnapshot, right: str,
         if short.delta is None:
             continue
         if not (SHORT_DELTA_MIN <= short.abs_delta <= SHORT_DELTA_MAX):
+            _note(rejects, "delta_out_of_band")
             continue
         if right == "put" and short.strike >= spot:
+            _note(rejects, "wrong_side_of_spot")
             continue
         if right == "call" and short.strike <= spot:
+            _note(rejects, "wrong_side_of_spot")
             continue
 
         for width in WIDTHS:
@@ -324,6 +426,7 @@ def _build_spreads(snap: MarketSnapshot, right: str,
                            else short.strike + width)
             long_leg = longs.get((str(short.expiry), long_strike))
             if long_leg is None or long_leg.delta is None:
+                _note(rejects, "no_long_leg")
                 continue
 
             credit = short.mid - long_leg.mid
@@ -331,6 +434,7 @@ def _build_spreads(snap: MarketSnapshot, right: str,
                 continue
             ratio = credit / width
             if not (MIN_CREDIT_RATIO <= ratio <= MAX_CREDIT_RATIO):
+                _note(rejects, "credit_ratio")
                 continue
 
             max_profit = credit * 100.0
@@ -351,6 +455,7 @@ def _build_spreads(snap: MarketSnapshot, right: str,
             ev_rw, pop_rw = spread_ev(spot, short.strike, long_strike,
                                       credit, vol, years, right)
             if math.isnan(ev_rw) or ev_rw < MIN_EV_RW:
+                _note(rejects, "ev_too_low")
                 continue
 
             # --- valuation B: priced at the market's IMPLIED volatility --- #
@@ -367,6 +472,7 @@ def _build_spreads(snap: MarketSnapshot, right: str,
             # simplification, and it is why ev_rn does not sit at zero.
             iv = short.iv if (short.iv is not None and short.iv > 0) else None
             if iv is None:
+                _note(rejects, "no_implied_vol")
                 continue     # edge is unmeasurable, so the spread is not taken
             ev_rn, pop_rn = spread_ev(spot, short.strike, long_strike,
                                       credit, iv, years, right)
@@ -378,7 +484,18 @@ def _build_spreads(snap: MarketSnapshot, right: str,
             # -vol estimate happened to come in low, which is estimation error
             # rather than compensation.
             vrp_edge = ev_rw - ev_rn
+            if rejects is not None:
+                rejects.measured += 1
             if vrp_edge < min_vrp:
+                # Fully measured and still declined - the numbers are worth
+                # keeping, because this is the gate that does the real work.
+                _note(rejects, "edge_too_low", {
+                    "underlying": snap.symbol, "kind": kind,
+                    "short_strike": short.strike, "long_strike": long_strike,
+                    "dte": short.dte, "vrp_edge": round(vrp_edge, 2),
+                    "required": round(min_vrp, 2),
+                    "pop": round(pop_rw, 4) if not math.isnan(pop_rw) else None,
+                })
                 continue
 
             worst_spread = max(short.spread_pct, long_leg.spread_pct)
@@ -423,7 +540,8 @@ def _build_spreads(snap: MarketSnapshot, right: str,
 # --------------------------------------------------------------------------- #
 
 def screen_snapshot(snap: MarketSnapshot,
-                    min_vrp: float = MIN_VRP_EDGE) -> list[SpreadCandidate]:
+                    min_vrp: float = MIN_VRP_EDGE,
+                    rejects: "Rejections | None" = None) -> list[SpreadCandidate]:
     """Valid credit spreads for one underlying, with a one-sided trend filter.
 
     Selling PUT spreads into a market already below its 20-day average is the
@@ -434,12 +552,12 @@ def screen_snapshot(snap: MarketSnapshot,
     """
     cands: list[SpreadCandidate] = []
     if snap.above_trend:
-        cands += _build_spreads(snap, "put", min_vrp)
+        cands += _build_spreads(snap, "put", min_vrp, rejects)
     if not snap.above_trend or not snap.sma20:
-        cands += _build_spreads(snap, "call", min_vrp)
+        cands += _build_spreads(snap, "call", min_vrp, rejects)
     if not cands and not snap.sma20:
-        cands = (_build_spreads(snap, "put", min_vrp)
-                 + _build_spreads(snap, "call", min_vrp))
+        cands = (_build_spreads(snap, "put", min_vrp, rejects)
+                 + _build_spreads(snap, "call", min_vrp, rejects))
     return cands
 
 
@@ -489,6 +607,7 @@ def screen(market, universe: list[str] | None = None,
 
     all_cands: list[SpreadCandidate] = []
     context: dict = {"underlyings": {}, "feed": None, "overrides": ov}
+    rejects = Rejections()
 
     for symbol in universe:
         try:
@@ -516,18 +635,25 @@ def screen(market, universe: list[str] | None = None,
             if iv and snap.realized_vol and snap.realized_vol > 0 else None,
             "contracts_examined": len(snap.rows),
         }
-        all_cands.extend(screen_snapshot(snap))
+        all_cands.extend(screen_snapshot(snap, rejects=rejects))
 
     # An adaptive guardrail may narrow the delta band; applied post-build so
     # the band lives in one place.
     if "delta_min" in ov or "delta_max" in ov:
         lo = float(ov.get("delta_min", SHORT_DELTA_MIN))
         hi = float(ov.get("delta_max", SHORT_DELTA_MAX))
-        all_cands = [c for c in all_cands if lo <= abs(c.short_delta) <= hi]
+        kept = [c for c in all_cands if lo <= abs(c.short_delta) <= hi]
+        for _ in range(len(all_cands) - len(kept)):
+            rejects.add("guardrail_delta")
+        all_cands = kept
     for banned in ov.get("banned_underlyings", []):
-        all_cands = [c for c in all_cands if c.underlying != banned]
+        kept = [c for c in all_cands if c.underlying != banned]
+        for _ in range(len(all_cands) - len(kept)):
+            rejects.add("guardrail_banned")
+        all_cands = kept
 
     shortlist = balanced_top(dedupe_best(all_cands), limit)
     context["candidates_before_dedupe"] = len(all_cands)
     context["candidates_returned"] = len(shortlist)
+    context["eliminated"] = rejects.to_dict()
     return shortlist, context

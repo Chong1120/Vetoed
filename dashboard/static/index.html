@@ -273,6 +273,18 @@
   }
   .note { color: var(--muted); font-size: 11.5px; margin-top: 5px; }
 
+  /* Rejection tally. Deliberately not .funnel - that class belongs to the
+     selectivity panel, and quietly inheriting its grid is the kind of
+     collision that emptied a panel once already. */
+  .rejbars { margin-top: 7px; display: flex; flex-direction: column; gap: 3px; }
+  .rejrow { position: relative; display: flex; align-items: baseline; gap: 7px;
+            padding: 2px 5px; border-radius: 3px; overflow: hidden; }
+  .rejbar { position: absolute; inset: 0 auto 0 0; background: var(--loss);
+            opacity: 0.13; border-radius: 3px; }
+  .rejnum { position: relative; min-width: 38px; text-align: right;
+            font-size: 11.5px; color: var(--text-dim); font-weight: 600; }
+  .rejlab { position: relative; font-size: 11.5px; color: var(--muted); }
+
   .empty {
     color: var(--muted); padding: 30px 20px; text-align: center; font-size: 13px;
   }
@@ -1180,12 +1192,14 @@ const DEC_FILTERS = [
   ["all",    "All"],
   ["traded", "Traded"],
   ["exit",   "Exits"],
+  ["screened", "Screened out"],
   ["vetoed", "Vetoed by risk"],
   ["passed", "Passed"],
   ["dry",    "Dry run"],
 ];
 
 function decClass(d, orderFor) {
+  if (d._screen) return "screened";
   if (d._exit) return "exit";
   if (String(d.outcome || "").toLowerCase() === "recovered") return "traded";
   const o = orderFor.get(d.id);
@@ -1227,6 +1241,30 @@ function shortlistNote(run, chosen) {
     </div></details>`;
 }
 
+/* What the screener threw out before anything reached the model.
+   The log could only ever show one reason a trade did not happen -
+   CONCENTRATION, the position limit - because that is the sole veto raised
+   after a candidate has been nominated. Everything rejected earlier was
+   discarded silently, so the agent read as one that always wants to trade and
+   is merely held back by a cap. It is the reverse: on a normal cycle it
+   measures a few hundred spreads and declines almost all of them on quality.
+   Cycles recorded before this existed carry no tally and produce no row -
+   never an invented one. */
+/* Four-figure counts are the norm here - a cycle rejects well over a
+   thousand spreads - and an unseparated 1782 reads as noise. */
+function grp(n) {
+  return Number(n || 0).toLocaleString("en-US");
+}
+
+function screenEvents(runs) {
+  return (runs || []).filter(r => r.eliminated_json
+                              && r.eliminated_json.rejected > 0).map(r => ({
+    id: "screen-" + r.id,
+    ts: r.ts,
+    _screen: r.eliminated_json,
+  }));
+}
+
 function exitEvents(closed) {
   return (closed || []).filter(c => c.closed_ts).map(c => ({
     id: "exit-" + c.closed_ts + "-" + (c.short_symbol || ""),
@@ -1239,7 +1277,7 @@ function decisions(rows, runs, orders, closed) {
   if (rows) {
     // Merge closes into the same list, newest first, so one timeline shows
     // opening and closing rather than two places to look.
-    rows = rows.concat(exitEvents(closed))
+    rows = rows.concat(exitEvents(closed), screenEvents(runs))
                .sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
     // Auto-refresh runs every 30 seconds. Resetting the page on every call
     // meant a reader who clicked "next" was thrown back to page one before
@@ -1265,7 +1303,7 @@ function render() {
     return;
   }
 
-  const counts = { all: DEC.rows.length, traded: 0, exit: 0, vetoed: 0, passed: 0, dry: 0 };
+  const counts = { all: DEC.rows.length, traded: 0, exit: 0, screened: 0, vetoed: 0, passed: 0, dry: 0 };
   for (const d of DEC.rows) counts[decClass(d, orderFor)]++;
 
   const shown = DEC.filter === "all"
@@ -1301,6 +1339,38 @@ function render() {
             of ${money(x.credit_total)} collected &middot;
             ${x.return_on_risk == null ? NB : x.return_on_risk.toFixed(1) + "%"}
             on ${money(x.max_loss_total)} risked</div>
+        </td></tr>`;
+    }
+    if (d._screen) {
+      const e = d._screen, top = (e.by_reason || []).slice(0, 5);
+      const worst = top.length ? top[0].count : 0;
+      return `<tr>
+        <td class="mono dim">${esc(shortTs(d.ts))}</td>
+        <td><div class="mono">screening</div>
+          <div class="sub">${grp(e.measured)} fully measured</div></td>
+        <td class="mono dim">${NB}</td>
+        <td class="mono">reject</td>
+        <td class="mono dim">${NB}</td>
+        <td><span class="pill">${grp(e.rejected)} rejected</span></td>
+        <td class="rationale">Measured the chains and declined every spread below.
+          <div class="rejbars">
+            ${top.map(r => `<div class="rejrow">
+              <span class="rejbar" style="width:${worst ? Math.max(3, r.count / worst * 100) : 0}%"></span>
+              <span class="rejnum mono">${grp(r.count)}</span>
+              <span class="rejlab">${esc(r.label)}</span>
+            </div>`).join("")}
+          </div>
+          ${(e.near_misses || []).length ? `<details style="margin-top:7px">
+            <summary class="sub dim" style="cursor:pointer">
+              show the ${e.near_misses.length} it measured in full and still declined
+            </summary>
+            <div class="sub" style="margin-top:6px; display:flex; flex-direction:column; gap:3px">
+              ${e.near_misses.map(n => `<div class="mono dim">
+                ${esc(n.underlying)} ${esc((n.kind || "").replace("_", " "))}
+                ${n.short_strike}/${n.long_strike} &middot; ${n.dte}DTE &middot;
+                edge ${money(n.vrp_edge)} against ${money(n.required)} required
+              </div>`).join("")}
+            </div></details>` : ""}
         </td></tr>`;
     }
     const c = d.candidate_json || {};

@@ -122,7 +122,12 @@ for (const id of ["positions", "decisions", "kpis"]) {
 // which does not attach to a VM context's global object, so reach it by
 // evaluating inside the context rather than through the sandbox.
 const DEC = vm.runInContext("DEC", ctx);
-for (const f of ["all", "traded", "exit", "vetoed", "passed", "dry"]) {
+// Driven from DEC_FILTERS itself, not a copy of it. A hand-kept list silently
+// stops covering a filter the moment one is added - which is exactly what
+// happened when "Screened out" was introduced and the check went on
+// reporting five filters passing.
+const FILTERS = vm.runInContext("DEC_FILTERS", ctx).map(f => f[0]);
+for (const f of FILTERS) {
   DEC.filter = f;
   try {
     ctx.render();
@@ -136,5 +141,33 @@ for (const f of ["all", "traded", "exit", "vetoed", "passed", "dry"]) {
   }
 }
 
-console.log("  dashboard: all 7 panels render, all 5 filters render (" +
+// The screened-out row is synthesised from a run's eliminated tally, so with
+// no such run in the fixture its renderer never executes and a fault in it
+// ships unseen. Drive it explicitly.
+const probe = {
+  id: "screen-probe", ts: "2026-09-02T14:00:00+00:00",
+  _screen: { measured: 131, rejected: 1782,
+    by_reason: [{reason: "oi_too_thin", label: "open interest below the liquidity floor", count: 1029},
+                {reason: "premium_too_small", label: "premium too small to be worth the risk", count: 514},
+                {reason: "edge_too_low", label: "measured edge below the $2.00 minimum", count: 1}],
+    near_misses: [{underlying: "QQQ", kind: "call_credit", short_strike: 721,
+                   long_strike: 722, dte: 6, vrp_edge: 1.42, required: 2.0}] },
+};
+DEC.rows = [probe]; DEC.filter = "screened";
+try {
+  ctx.render();
+} catch (e) {
+  console.error("SCREENED-OUT ROW THREW: " + e.message);
+  process.exit(1);
+}
+for (const must of ["1,782", "1,029", "open interest below", "QQQ", "$1.42"]) {
+  if (!els.decisions.innerHTML.includes(must)) {
+    console.error("SCREENED-OUT ROW MISSING '" + must + "'");
+    console.error(els.decisions.innerHTML.slice(0, 700));
+    process.exit(1);
+  }
+}
+
+console.log("  dashboard: all 7 panels render, all " + FILTERS.length +
+            " filters render, screened-out row renders (" +
             data.decisions.length + " decisions, " + data.positions.length + " spreads)");

@@ -131,6 +131,7 @@ MIGRATIONS = [
     "ALTER TABLE runs ADD COLUMN context_json TEXT",
     "ALTER TABLE orders ADD COLUMN exit_reason TEXT",
     "ALTER TABLE runs ADD COLUMN shortlist_json TEXT",
+    "ALTER TABLE runs ADD COLUMN eliminated_json TEXT",
 ]
 
 
@@ -163,6 +164,7 @@ def start_run(market_open: bool, feed: str | None, equity: float | None,
               day_pnl: float | None, halted: bool, candidates: int,
               note: str = "", context: dict | None = None,
               shortlist: list[dict] | None = None,
+              eliminated: dict | None = None,
               path: str = DB_PATH) -> int:
     """Open a run row.
 
@@ -174,16 +176,24 @@ def start_run(market_open: bool, feed: str | None, equity: float | None,
     took. Without it the journal records a choice with nothing to compare it
     against, and "picks one item from a list it did not write" is a claim the
     page cannot show.
+
+    `eliminated` is everything that never became a candidate at all - counted
+    by the reason the screener threw it out. The log could previously show
+    only one reason a trade did not happen, the position limit, because that
+    is the sole veto raised after nomination. A reader saw an agent forever
+    straining against a cap and never one turning work down on quality, which
+    is what it spends almost all of its time doing.
     """
     with connect(path) as c:
         cur = c.execute(
             "INSERT INTO runs (ts, market_open, feed, equity, day_pnl, halted,"
-            " candidates, note, context_json, shortlist_json)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " candidates, note, context_json, shortlist_json, eliminated_json)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (now(), int(market_open), feed, equity, day_pnl, int(halted),
              candidates, note,
              json.dumps(context.get("underlyings", {})) if context else None,
-             json.dumps(_trim(shortlist)) if shortlist else None))
+             json.dumps(_trim(shortlist)) if shortlist else None,
+             json.dumps(eliminated) if eliminated else None))
         return int(cur.lastrowid)
 
 
