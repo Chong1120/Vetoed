@@ -1,0 +1,20 @@
+# Vercel serves /api/* and nothing else - its root is a 404, and the dashboard
+# is hosted by GitHub Pages. So the deployment needs api/ and vercel.json, and
+# uploading the rest only slows the build and enlarges what is stored.
+#
+# The journal matters most here. It is committed every ten minutes during a
+# session, and it is not read from the bundle at all: api/journal.py fetches it
+# live from the GitHub contents API, which is what makes the dashboard current
+# rather than as-of-last-deploy.
+agent/
+dashboard/
+docs/
+journal/
+scripts/
+tests/
+design/
+site/
+.github/
+.venv/
+*.pptx
+*.db

@@ -1,5 +1,16 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "_comment_ignoreCommand": [
+    "Exit 0 skips the build, exit 1 runs it. This skips any commit that",
+    "touched nothing outside journal/ - the agent commits its journal every",
+    "ten minutes while trading, and none of it is read from the bundle:",
+    "api/journal.py fetches it live from the GitHub contents API. Those",
+    "commits were rebuilding and storing the whole deployment for nothing.",
+    "If HEAD^ cannot be resolved the || branch runs and the build proceeds,",
+    "so an unexpected repository state deploys rather than silently skipping."
+  ],
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- . ':(exclude)journal' 2>/dev/null || exit 1",
+
   "crons": [
     {
       "path": "/api/start-session",

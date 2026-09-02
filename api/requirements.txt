@@ -1,0 +1,15 @@
+# Deliberately empty. Every function in this directory imports the standard
+# library and nothing else - json, os, urllib, http.server. Check for yourself:
+#
+#   grep -hE '^(import|from) ' api/*.py | sort -u
+#
+# Without this file Vercel falls back to the project's pyproject.toml and
+# installs the entire trading stack - alpaca-py, anthropic, mcp,
+# alpaca-mcp-server, fastmcp, apscheduler, and pandas and numpy behind them,
+# 212MB installed - into a set of read-only HTTP proxies that need none of it.
+# Every deployment kept its own copy. Roughly 100MB a deployment, a deployment
+# per commit, and a commit every ten minutes while the agent trades: 20.43GB
+# against a 10GB allowance, from functions whose own code is 30KB.
+#
+# If a function here ever genuinely needs a package, add that one package.
+# Do not point this at pyproject.toml.
