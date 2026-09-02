@@ -456,11 +456,23 @@ function status(summary, runs, live) {
   }
   
   bits.push(`<span class="pill info">${esc(feed)} feed</span>`);
+  // The market badge asks the broker, not the journal. It used to read a flag
+  // off the last cycle, which is only ever true of the moment that cycle ran -
+  // so the badge sat on "market open" all night, every night, after the
+  // session ended. The clock comes from Alpaca and knows holidays and early
+  // closes. Only if the broker is unreachable does it fall back to the last
+  // cycle, and then it says so rather than quietly showing a stale flag.
+  const liveOpen = live && typeof live.market_open === "boolean"
+    ? live.market_open : null;
+  const mktOpen  = liveOpen === null ? (run ? !!run.market_open : null) : liveOpen;
+  if (mktOpen !== null) {
+    bits.push(`<span class="pill ${mktOpen ? "on" : "off"}">`
+      + `<span class="dot ${mktOpen ? "live" : ""}" `
+      + `style="background:${mktOpen ? "var(--profit)" : "var(--muted)"}"></span>`
+      + `market ${mktOpen ? "open" : "closed"}`
+      + `${liveOpen === null ? " (as of last cycle)" : ""}</span>`);
+  }
   if (run) {
-    bits.push(`<span class="pill ${run.market_open ? "on" : "off"}">`
-      + `<span class="dot ${run.market_open ? "live" : ""}" `
-      + `style="background:${run.market_open ? "var(--profit)" : "var(--muted)"}"></span>`
-      + `market ${run.market_open ? "open" : "closed"}</span>`);
     if (run.halted) bits.push(`<span class="pill alert">session halted</span>`);
     bits.push(`<span class="pill">last run ${esc(shortTs(run.ts))} UTC</span>`);
   } else {

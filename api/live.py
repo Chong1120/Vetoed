@@ -80,6 +80,14 @@ def build():
     try:
         acct = _get("/account", key, secret)
         positions = _get("/positions", key, secret)
+        # Alpaca's own clock. The page used to read a market_open flag off the
+        # last journalled cycle, which freezes the moment a session ends - so
+        # the badge sat on "market open" all night. This is the authority, and
+        # it knows holidays and early closes that no clock arithmetic does.
+        try:
+            clock = _get("/clock", key, secret)
+        except Exception:
+            clock = None
         # The broker's own equity series. Ours is one point per cycle - a dot
         # every ten minutes at best, and nothing at all overnight. This is the
         # same account at 15-minute resolution, and it is the broker's record
@@ -109,6 +117,9 @@ def build():
         # Alpaca pads the series with zeros where the account did not exist
         # yet; plotting those draws a cliff to the axis that never happened.
         "equity_series": _series(hist),
+        "market_open": (clock or {}).get("is_open"),
+        "next_open": (clock or {}).get("next_open"),
+        "next_close": (clock or {}).get("next_close"),
         "positions": [{
             "symbol": p.get("symbol"),
             "qty": _num(p.get("qty")),

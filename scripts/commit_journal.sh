@@ -69,9 +69,16 @@ fi
 # while a session was live silently dropped every subsequent cycle's record
 # while the agent went on trading perfectly.
 #
-# The agent is authoritative for its own journal - it rebuilt that state from
-# the broker moments ago - so take everyone else's work, then lay this
-# cycle's journal on top. No merge, nothing to conflict.
+# Laying this cycle's journal on top of main is what USED to happen here, and
+# it assumed the pushing session always holds the newest journal. That is
+# false for a session that queued: on 2026-09-01 run #31 checked out at 19:34,
+# waited twenty-three minutes behind run #30, then started at 20:05 and copied
+# its stale journal over the 19:44 and 19:55 cycles #30 had committed while it
+# waited. Both were lost.
+#
+# So the two journals are now merged row by row - matched on cycle timestamp
+# and on the deterministic client_order_id - and whichever side is older, no
+# recorded row is dropped. Neither session has to know which of them is ahead.
 echo "push rejected - rebuilding on top of main"
 KEEP="$(mktemp -d)"
 cp journal/trades.db "$KEEP/" 2>/dev/null || true
@@ -80,8 +87,17 @@ cp journal/data.json "$KEEP/" 2>/dev/null || true
 for attempt in 1 2 3; do
   timeout 45 git fetch --quiet origin main || true
   git reset --hard --quiet origin/main
-  cp "$KEEP/trades.db" journal/trades.db 2>/dev/null || true
-  cp "$KEEP/data.json" journal/data.json 2>/dev/null || true
+  # journal/trades.db is now main's copy; fold this session's rows into it.
+  # If the merge cannot run, fall back to the old copy-over rather than
+  # losing this cycle entirely - a stale journal beats no journal, and the
+  # next cycle rebuilds from the broker either way.
+  if ! python scripts/merge_journal.py "$KEEP/trades.db" journal/trades.db; then
+    echo "::warning::journal merge failed - falling back to overwrite"
+    cp "$KEEP/trades.db" journal/trades.db 2>/dev/null || true
+  fi
+  # data.json is derived, so rebuild it from the merged database rather than
+  # restoring the pre-merge copy, which would not contain the other session.
+  python scripts/export_journal_json.py >/dev/null 2>&1     || cp "$KEEP/data.json" journal/data.json 2>/dev/null || true
   git add journal/trades.db journal/data.json
   if git diff --cached --quiet; then
     echo "journal already current on main"
