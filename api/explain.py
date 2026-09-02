@@ -33,26 +33,36 @@ LLM_URL = "https://api.featherless.ai/v1/chat/completions"
 MODEL = os.environ.get("FEATHERLESS_MODEL") or "Qwen/Qwen2.5-72B-Instruct"
 
 SYSTEM = (
-    "You are the trading agent, writing a short note to the person whose "
-    "account you manage, explaining one position you took. Write as yourself: "
-    "I sold, I closed, I held. You are given your own recorded facts "
-    "about the trade as JSON.\n\n"
+    "You are the trading agent, writing to the person whose account you "
+    "manage. Explain the TECHNICAL reasoning for one position: what you "
+    "measured, what it meant, and what you did about it. Write as yourself "
+    "- I measured, I sold, I closed.\n\n"
+    "WHAT YOU ARE LOOKING AT:\n"
+    "- The two expected values are the SAME spread under the SAME model, "
+    "priced once at what the underlying has actually been doing and once "
+    "at what the market is charging. Only the volatility differs. The "
+    "measured edge is the gap between them - the premium being harvested."
+    "\n"
+    "- The two probabilities of profit are that same gap expressed as a "
+    "probability rather than as money.\n"
+    "- Open interest and bid-ask are the liquidity gates it had to clear "
+    "before anything else was considered.\n\n"
     "RULES, and they are absolute:\n"
-    "- NEVER calculate anything. Every figure you need is already given "
-    "as a dollar amount. If a number is not in the facts, do not state "
-    "it.\n"
-    "- Never speculate about the market, your timing, or what happens "
-    "next. If something is not recorded, leave it out rather than "
-    "guessing.\n"
-    "- Do not congratulate yourself and do not apologise. Say what you "
-    "did and why you did it.\n"
-    "- Two or three sentences, 45 to 75 words. Plain English, no bullet "
-    "points, no markdown, no headings, no dates unless they matter.\n"
-    "- A credit spread pays when the underlying stays on the safe side "
-    "of the strike you sold. Explain it that way, in ordinary words.\n"
-    "- If the facts say the reasoning was lost, say plainly that you no "
-    "longer have your notes from the time, and describe only what is "
-    "recorded."
+    "- NEVER calculate. Every figure is precomputed. Quote what you are "
+    "given, exactly, and nothing else.\n"
+    "- NEVER print a field name. Each key states its own unit: a key "
+    "ending DOLLARS is money, one ending PERCENT is a percentage. "
+    "Describe it in English with that unit attached. Reporting a dollar "
+    "figure as a volatility, or a percentage as a dollar amount, is the "
+    "worst error you can make here.\n"
+    "- Cite the specific measurements. Do not write that the edge was "
+    "strong; write what it was and what it was measured against.\n"
+    "- Never speculate about the market or what happens next. If "
+    "something is not recorded, leave it out.\n"
+    "- Four to six sentences, 90 to 140 words. No bullet points, no "
+    "markdown, no headings.\n"
+    "- If the facts say the reasoning was lost, say so plainly and "
+    "describe only what is recorded."
 )
 
 
@@ -80,14 +90,56 @@ def _facts(data, leg):
         else:
             return None
 
-    # The reasoning recorded when it was opened, if the decision survived.
+    # The screener's whole measurement, as recorded. A note that says "a
+    # strong edge" explains nothing; the numbers behind that judgement are all
+    # in the journal and this is where they earn their keep.
     for d in data.get("decisions") or []:
         cand = d.get("candidate_json") or {}
-        if cand.get("short_symbol") == leg and d.get("llm_rationale"):
-            out["entry_rationale"] = d["llm_rationale"]
-            out["entry_edge"] = cand.get("vrp_edge")
-            out["entry_pop"] = cand.get("pop")
-            out["entry_dte"] = cand.get("dte")
+        if cand.get("short_symbol") == leg:
+            # Every field carries its unit in its own name.
+            #
+            # Handed the raw schema, the model read "ev 25.73, ev_rn 11.12"
+            # and wrote "realised volatility of 25.73 and implied volatility
+            # of 11.12". Those are expected values in DOLLARS and it reported
+            # them as volatility percentages - confidently, and to a reader
+            # with no way to tell. The prompt explained the units in prose at
+            # the time; prose was not enough. A name like ev_rn means nothing
+            # without the schema, so the unit goes in the key where it cannot
+            # be separated from the number.
+            #
+            # Fractions are converted here too. pop 0.8527 invites the model
+            # to print "0.85% probability", so it arrives as 85.3.
+            def _num(key, scale=1.0, nd=2):
+                v = cand.get(key)
+                return round(float(v) * scale, nd) if v is not None else None
+
+            screening = {
+                "expected_value_at_realised_vol_DOLLARS": _num("ev"),
+                "expected_value_at_implied_vol_DOLLARS": _num("ev_rn"),
+                "measured_edge_DOLLARS_per_spread": _num("vrp_edge"),
+                "max_profit_per_spread_DOLLARS": _num("max_profit"),
+                "max_loss_per_spread_DOLLARS": _num("max_loss"),
+                "probability_of_profit_real_world_PERCENT": _num("pop", 100.0, 1),
+                "probability_of_profit_risk_neutral_PERCENT": _num("pop_rn", 100.0, 1),
+                "implied_volatility_PERCENT": _num("short_iv", 100.0, 1),
+                "realised_volatility_20day_PERCENT": _num("realized_vol", 100.0, 1),
+                "short_strike_delta": _num("short_delta", 1.0, 4),
+                "short_strike_distance_out_of_the_money_PERCENT":
+                    _num("distance_pct", 100.0, 2),
+                "days_to_expiry_at_entry": cand.get("dte"),
+                "strike_width_DOLLARS": cand.get("width"),
+                "open_interest_on_the_thinner_leg": cand.get("min_open_interest"),
+                "widest_bid_ask_as_PERCENT_of_mid":
+                    _num("worst_spread_pct", 100.0, 1),
+            }
+            out["screening"] = {k: v for k, v in screening.items()
+                                if v is not None}
+            if d.get("llm_rationale"):
+                out["model_rationale_at_entry"] = d["llm_rationale"]
+            if d.get("llm_confidence") is not None:
+                out["model_confidence"] = d["llm_confidence"]
+            if d.get("risk_reasons"):
+                out["sizing_notes"] = d["risk_reasons"]
             break
 
     # Every money figure, precomputed. Asked to work one out, the model
@@ -129,7 +181,7 @@ def explain(leg):
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": json.dumps(facts, default=str)}],
         "temperature": 0.2,
-        "max_tokens": 220,
+        "max_tokens": 400,
     }).encode("utf-8")
     req = urllib.request.Request(
         LLM_URL, data=body, method="POST",
