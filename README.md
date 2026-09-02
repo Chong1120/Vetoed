@@ -2,9 +2,14 @@
 
 **An autonomous options agent where the AI is the least-trusted component.**
 
-Claude selects from a pre-screened shortlist. Deterministic risk gates it cannot
-influence decide what is permitted and how large — and can veto it entirely.
-Every decision, including every rejection, is logged and auditable.
+A language model selects from a pre-screened shortlist. Deterministic risk gates
+it cannot influence decide what is permitted and how large — and can veto it
+entirely. Every decision, including every rejection, is logged and auditable.
+
+Which model is deliberately interchangeable, because the architecture does not
+depend on it: the runs in this journal used **Qwen 2.5 72B** through Featherless,
+and Claude is supported through the same interface. Nothing downstream of the
+selection knows or cares which one answered.
 
 Built for the [lablab.ai × Alpaca AI Trading Agents hackathon](https://lablab.ai)
 (28 Aug – 4 Sept 2026). Runs on Alpaca **paper trading** through Alpaca's
@@ -88,7 +93,7 @@ realised) produce **zero** candidates.
                                    ▼
      ┌───────────────┐    ┌─────────────────┐    ┌──────────────────┐
      │  data.py      │───▶│  screener.py    │───▶│  brain.py        │
-     │  Alpaca APIs  │    │  DETERMINISTIC  │    │  Claude          │
+     │  Alpaca APIs  │    │  DETERMINISTIC  │    │  Qwen 72B / LLM  │
      │  chain+Greeks │    │  dual-measure EV│    │  selects only    │
      └───────────────┘    └─────────────────┘    └────────┬─────────┘
               ▲                    ▲                      │
@@ -111,6 +116,44 @@ realised) produce **zero** candidates.
 The LLM sits in the middle and cannot reach the broker without passing a gate it
 has no ability to influence. It *selects* from a pre-vetted shortlist; it never
 *constructs* a trade, sizes a position, or overrides a limit.
+
+## What the dashboard shows that most do not
+
+[chong1120.github.io/Vetoed](https://chong1120.github.io/Vetoed/) — read-only,
+no route anywhere in it can place or modify an order.
+
+**Every rejection, by the reason that caused it.** A decision log that records
+only what an agent traded flatters it. On a normal cycle Vetoed measures the
+option chains across four underlyings and declines around fifteen hundred
+spreads — open interest below the liquidity floor, premium too small to be
+worth the risk, delta outside the band, measured edge under the $2.00 minimum.
+Each reason is counted and names actual contracts with the measurement that
+failed and the floor it failed against:
+
+```
+  921  open interest below the liquidity floor
+       SPY 690 CALL 6DTE - open interest 2, floor 500
+  404  premium too small to be worth the risk
+       SPY 779 CALL 6DTE - bid $0.09, floor $0.10
+```
+
+Cycles recorded before this existed show their totals and say plainly that the
+breakdown was never captured. It is not reconstructed after the fact.
+
+**The agent explains its own positions.** Each open and closed spread carries a
+note the model writes from that position's journal entry — what it measured,
+what the numbers were, what it did. It is handed every figure precomputed and
+forbidden from calculating, because when it was allowed to it reported a $1,946
+credit as $19.46: options are a hundred shares a contract and it did not know.
+Field names carry their units for the same reason — handed `ev` and `ev_rn` it
+described dollars as volatility percentages.
+
+**The curve has to agree with the account.** Alpaca's portfolio history, on this
+paper account, returns the base value added to the equity — $100,000 plus an
+account of $102,287 comes back as $202,287. The page checks the series against
+the live account balance and drops it if the two disagree by more than 2%.
+
+---
 
 ## Setup
 
@@ -147,7 +190,7 @@ FEATHERLESS_API_KEY=rc_...    # optional — see below
 
 # one full cycle, DRY RUN — no orders submitted
 .venv\Scripts\python.exe -m agent.loop --force
-.venv\Scripts\python.exe -m agent.loop --force --no-llm   # without Claude
+.venv\Scripts\python.exe -m agent.loop --force --no-llm   # no model at all
 
 # LIVE — submits real paper orders
 .venv\Scripts\python.exe -m agent.loop --live
@@ -164,7 +207,7 @@ FEATHERLESS_API_KEY=rc_...    # optional — see below
 ### Running without an Anthropic key
 
 The agent is **fully functional with Alpaca alone**. With no LLM provider,
-with `--no-llm`, or if the Claude API errors mid-session, `brain.py` falls back
+with `--no-llm`, or if the model API errors mid-session, `brain.py` falls back
 to deterministic selection. Every risk gate is identical in both modes — the
 difference is judgement, not protection.
 
