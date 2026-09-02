@@ -1,15 +1,23 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "_comment_ignoreCommand": [
-    "Exit 0 skips the build, exit 1 runs it. This skips any commit that",
-    "touched nothing outside journal/ - the agent commits its journal every",
-    "ten minutes while trading, and none of it is read from the bundle:",
-    "api/journal.py fetches it live from the GitHub contents API. Those",
-    "commits were rebuilding and storing the whole deployment for nothing.",
-    "If HEAD^ cannot be resolved the || branch runs and the build proceeds,",
-    "so an unexpected repository state deploys rather than silently skipping."
+    "Exit 0 skips the build, exit 1 runs it. Three conditions must ALL hold",
+    "before a build is skipped: the commit has a single parent, its message is",
+    "one the agent wrote, and it touched nothing outside journal/.",
+    "",
+    "The first condition is the one learned the hard way. Comparing HEAD^ to",
+    "HEAD on a MERGE compares against the first parent - the branch being",
+    "merged into - so a merge that brings in journal commits looks like a",
+    "journal-only change even when the local side carried code. A fix to",
+    "api/live.py was pushed that way and never deployed: the build was skipped",
+    "and the site kept serving the bug it fixed. Merges now always build.",
+    "",
+    "The message check is the belt to that braces. Only scripts/commit_journal.sh",
+    "writes 'Journal: cycle ...', so anything a person or another tool commits",
+    "deploys no matter which files it touched."
   ],
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- . ':(exclude)journal' 2>/dev/null || exit 1",
+  "ignoreCommand": "if git rev-parse -q --verify HEAD^2 >/dev/null 2>&1; then exit 1; fi; git log -1 --format=%s | grep -q '^Journal: cycle ' || exit 1; git diff --quiet HEAD^ HEAD -- . ':(exclude)journal' || exit 1; exit 0",
+
 
   "crons": [
     {
