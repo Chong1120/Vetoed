@@ -41,18 +41,63 @@
 
   /* The agent's own note on a position. Set as something a person wrote -
      indented, quiet, in its own voice - rather than another data cell. */
-  .agent-note {
-    margin: 10px 0 2px; padding: 10px 14px; border-left: 2px solid var(--accent-dk);
-    background: var(--raised); border-radius: 0 6px 6px 0;
-    font-size: 12.5px; line-height: 1.6; color: var(--text-dim); max-width: 62ch;
+  /* The agent's reasoning, behind a button.
+     It reads as a short exchange - the question a reader actually has, then
+     the agent answering it - because a bare paragraph of numbers under a row
+     looked like more table, and got skimmed past. */
+  .ai-wrap { margin: 9px 0 3px; }
+  .ai-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--raised); color: var(--text-dim); cursor: pointer;
+    font: inherit; font-size: 11.5px; letter-spacing: .01em;
+    transition: border-color .15s, color .15s;
   }
-  .agent-note .who {
-    display: block; font-family: var(--mono); font-size: 9.5px; font-weight: 600;
-    letter-spacing: .1em; text-transform: uppercase; color: var(--accent);
-    margin-bottom: 5px;
+  .ai-btn:hover { border-color: var(--accent-dk); color: var(--text); }
+  .ai-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ai-spark { color: var(--accent); font-size: 9px; }
+  .ai-caret { font-size: 9px; transition: transform .18s; }
+  .ai-wrap.open .ai-caret { transform: rotate(180deg); }
+  .ai-wrap.open .ai-btn { border-color: var(--accent-dk); color: var(--text); }
+
+  .ai-chat {
+    margin-top: 9px; padding: 13px 14px; max-width: 68ch;
+    background: var(--raised); border: 1px solid var(--line);
+    border-radius: 10px; display: flex; flex-direction: column; gap: 9px;
   }
-  .agent-note.pending { color: var(--muted); font-style: italic; }
-  .agent-note.failed { border-left-color: var(--line); color: var(--muted); }
+  .ai-msg { font-size: 12.4px; line-height: 1.6; border-radius: 12px;
+            padding: 8px 12px; }
+  .ai-msg.you {
+    align-self: flex-end; max-width: 82%; background: var(--accent-dk);
+    color: var(--text); border-bottom-right-radius: 3px;
+  }
+  .ai-row { display: flex; align-items: flex-start; gap: 8px; }
+  .ai-av {
+    flex: 0 0 22px; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); color: var(--bg); font-family: var(--mono);
+    font-size: 10px; font-weight: 700; display: flex;
+    align-items: center; justify-content: center; margin-top: 2px;
+  }
+  .ai-msg.bot {
+    background: var(--bg); border: 1px solid var(--line);
+    color: var(--text-dim); border-bottom-left-radius: 3px; flex: 1;
+  }
+  .ai-msg.typing { display: flex; gap: 4px; align-items: center; padding: 12px; }
+  .ai-msg.typing i {
+    width: 5px; height: 5px; border-radius: 50%; background: var(--muted);
+    animation: aiblink 1.3s infinite;
+  }
+  .ai-msg.typing i:nth-child(2) { animation-delay: .18s; }
+  .ai-msg.typing i:nth-child(3) { animation-delay: .36s; }
+  @keyframes aiblink { 0%, 60%, 100% { opacity: .25 } 30% { opacity: 1 } }
+  @media (prefers-reduced-motion: reduce) {
+    .ai-msg.typing i { animation: none; opacity: .5; }
+    .ai-caret { transition: none; }
+  }
+  .ai-foot {
+    font-size: 10.5px; color: var(--muted); text-align: right;
+    border-top: 1px solid var(--line); padding-top: 7px;
+  }
 
   /* Cumulative selectivity. The funnel above it answers "what happened this
      cycle"; this answers "how selective is this thing", which is the claim
@@ -905,8 +950,8 @@ function closedPositions(rows) {
             ? `<span class="pill ${/take profit/i.test(r.exit_reason) ? "on" : "warn"}">${esc(r.exit_reason)}</span>`
             : `<span class="dim">not recorded</span>`}</td>
     </tr>
-    ${noteSlot(r.short_symbol)
-      ? `<tr><td colspan="9" style="padding-top:0">${noteSlot(r.short_symbol)}</td></tr>`
+    ${noteSlot(r.short_symbol, "closed")
+      ? `<tr><td colspan="9" style="padding-top:0">${noteSlot(r.short_symbol, "closed")}</td></tr>`
       : ""}`;
   }).join("") + `</tbody></table></div>
     <div class="meta-row">
@@ -915,7 +960,7 @@ function closedPositions(rows) {
       <span class="sub">realised total
         <strong class="${cls(total)}">${signed(total)}</strong></span>
     </div>`;
-  fillNotes(el);
+  wireNotes(el);
 }
 
 /* THE AGENT'S NOTE.
@@ -932,38 +977,61 @@ function closedPositions(rows) {
 const NOTE_API = "https://vetoed-three.vercel.app/api/explain";
 const NOTES = new Map();          // leg -> text, so a redraw never re-asks
 
-function noteSlot(leg) {
+function noteSlot(leg, state) {
   if (!leg || !NOTE_API) return "";
-  const cached = NOTES.get(leg);
-  if (cached === undefined) {
-    return `<div class="agent-note pending" data-note="${esc(leg)}">
-      <span class="who">the agent</span>writing…</div>`;
-  }
-  if (cached === null) return "";                       // asked, unavailable
-  return `<div class="agent-note"><span class="who">the agent</span>${esc(cached)}</div>`;
+  const q = state === "closed"
+    ? "Why did you open this position, and why did you close it?"
+    : "Why did you open this position?";
+  return `<div class="ai-wrap">
+    <button type="button" class="ai-btn" data-note="${esc(leg)}"
+            data-q="${esc(q)}" aria-expanded="false">
+      <span class="ai-spark" aria-hidden="true">&#9673;</span>
+      <span class="ai-label">AI reasoning</span>
+      <span class="ai-caret" aria-hidden="true">&#9662;</span>
+    </button>
+    <div class="ai-chat" hidden></div>
+  </div>`;
 }
 
-// Fetch one note at a time. Nothing here blocks the page: the row is already
-// complete without it.
-async function fillNotes(root) {
-  const slots = Array.from(root.querySelectorAll("[data-note]"));
-  for (const el of slots) {
-    const leg = el.dataset.note;
-    if (NOTES.has(leg)) continue;
+/* Opened on demand, and only once.
+   Every visible position used to ask the model the moment the page drew,
+   which is a dozen calls nobody had asked for - slow, and paid for whether or
+   not a single one was read. It is a button now: nothing is requested until
+   someone wants it, and the answer is cached so reopening is instant. */
+async function askAgent(btn) {
+  const wrap = btn.parentElement, chat = wrap.querySelector(".ai-chat");
+  const leg = btn.dataset.note, open = chat.hidden;
+  chat.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+  wrap.classList.toggle("open", open);
+  if (!open || chat.dataset.filled) return;
+
+  chat.innerHTML = `<div class="ai-msg you">${esc(btn.dataset.q)}</div>
+    <div class="ai-row"><span class="ai-av" aria-hidden="true">V</span>
+      <div class="ai-msg bot typing"><i></i><i></i><i></i></div></div>`;
+
+  let text = NOTES.get(leg);
+  if (text === undefined) {
     try {
       const r = await fetch(NOTE_API + "?leg=" + encodeURIComponent(leg));
       const j = r.ok ? await r.json() : null;
-      NOTES.set(leg, (j && j.explanation) ? j.explanation : null);
-    } catch (_) {
-      NOTES.set(leg, null);
-    }
-    const text = NOTES.get(leg);
-    if (text) {
-      el.classList.remove("pending");
-      el.innerHTML = `<span class="who">the agent</span>${esc(text)}`;
-    } else {
-      el.remove();
-    }
+      text = (j && j.explanation) ? j.explanation : null;
+    } catch (_) { text = null; }
+    NOTES.set(leg, text);
+  }
+  chat.dataset.filled = "1";
+  // No note is a stated absence, not a blank panel. The row's numbers were
+  // never dependent on this and are all still there.
+  chat.innerHTML = `<div class="ai-msg you">${esc(btn.dataset.q)}</div>
+    <div class="ai-row"><span class="ai-av" aria-hidden="true">V</span>
+      <div class="ai-msg bot">${text ? esc(text)
+        : "I can't reach my reasoning for this position right now."}</div></div>
+    <div class="ai-foot">written by the agent from its own journal entry</div>`;
+}
+
+function wireNotes(root) {
+  for (const b of root.querySelectorAll(".ai-btn")) {
+    b.addEventListener("click", () => askAgent(b));
   }
 }
 
@@ -1063,8 +1131,8 @@ function positions(rows, broker, live, spots) {
         ${exitBar(pnl, tp, sl)}</td>
       <td>${payoffSvg(k, kLong, credit, qty, spot, isPut)}</td>
     </tr>
-    ${noteSlot(r.short_symbol)
-      ? `<tr><td colspan="8" style="padding-top:0">${noteSlot(r.short_symbol)}</td></tr>`
+    ${noteSlot(r.short_symbol, "open")
+      ? `<tr><td colspan="8" style="padding-top:0">${noteSlot(r.short_symbol, "open")}</td></tr>`
       : ""}`;
   }).join("");
 
@@ -1116,7 +1184,7 @@ function positions(rows, broker, live, spots) {
       </tr>`).join("") + `</tbody></table></div></div>`;
 
   // A real button, so it is obvious it can be pressed and reachable by keyboard.
-  fillNotes(_p);
+  wireNotes(_p);
   const btn = $("legs-btn"), panel = $("legs-panel");
   if (btn && panel) {
     btn.addEventListener("click", () => {
@@ -1199,7 +1267,7 @@ const DEC_FILTERS = [
 ];
 
 function decClass(d, orderFor) {
-  if (d._screen) return "screened";
+  if (d._screen || d._screenOld) return "screened";
   if (d._exit) return "exit";
   if (String(d.outcome || "").toLowerCase() === "recovered") return "traded";
   const o = orderFor.get(d.id);
@@ -1257,12 +1325,30 @@ function grp(n) {
 }
 
 function screenEvents(runs) {
-  return (runs || []).filter(r => r.eliminated_json
-                              && r.eliminated_json.rejected > 0).map(r => ({
-    id: "screen-" + r.id,
-    ts: r.ts,
-    _screen: r.eliminated_json,
-  }));
+  return (runs || []).map(r => {
+    if (r.eliminated_json && r.eliminated_json.rejected > 0) {
+      return { id: "screen-" + r.id, ts: r.ts, _screen: r.eliminated_json };
+    }
+    /* Cycles from before the tally existed. They recorded how many contracts
+       were examined and how many candidates survived, and nothing about why
+       the rest were dropped - that breakdown was never captured, and the
+       option chain as it stood at that minute is not stored anywhere, so it
+       cannot be worked out after the fact. What IS recorded is shown, and the
+       gap is stated. Re-fetching old chains and re-running the screener would
+       produce a plausible reconstruction, which is precisely the thing that
+       must not be presented as a record of what happened. */
+    const ctx = r.context_json;
+    if (!ctx || typeof ctx !== "object") return null;
+    let examined = 0, names = 0;
+    for (const k in ctx) {
+      const v = ctx[k];
+      if (v && v.contracts_examined) { examined += v.contracts_examined; names++; }
+    }
+    if (!examined) return null;
+    return { id: "screen-" + r.id, ts: r.ts,
+             _screenOld: { examined: examined, names: names,
+                           survived: r.candidates || 0 } };
+  }).filter(Boolean);
 }
 
 function exitEvents(closed) {
@@ -1339,6 +1425,23 @@ function render() {
             of ${money(x.credit_total)} collected &middot;
             ${x.return_on_risk == null ? NB : x.return_on_risk.toFixed(1) + "%"}
             on ${money(x.max_loss_total)} risked</div>
+        </td></tr>`;
+    }
+    if (d._screenOld) {
+      const o = d._screenOld;
+      return `<tr>
+        <td class="mono dim">${esc(shortTs(d.ts))}</td>
+        <td><div class="mono">screening</div>
+          <div class="sub">${o.names} underlyings</div></td>
+        <td class="mono dim">${NB}</td>
+        <td class="mono">reject</td>
+        <td class="mono dim">${NB}</td>
+        <td><span class="pill">${grp(o.examined)} examined</span></td>
+        <td class="rationale">Examined ${grp(o.examined)} contracts and carried
+          ${o.survived} candidate${o.survived === 1 ? "" : "s"} forward.
+          <div class="note">This cycle ran before the agent recorded why each
+            spread was rejected, so only the totals survive. The breakdown
+            cannot be reconstructed from the journal, and is not guessed.</div>
         </td></tr>`;
     }
     if (d._screen) {

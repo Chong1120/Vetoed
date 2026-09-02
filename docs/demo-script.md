@@ -105,7 +105,7 @@ It can learn, but it can't learn its way around the risk controls.
 <break time="1.0s" />
 
 [11a — screenshot 1: equity, funnel, volatility]
-And this runs unattended. A schedule fires one full cycle roughly every thirty minutes during the US session, with nothing of mine switched on. Every cycle reconciles against the broker first, so a restart can't duplicate a position.
+And this runs unattended. A scheduled trigger starts one long session each morning, and inside it the agent re-screens every ten minutes and looks for a new position every thirty, with nothing of mine switched on. Every cycle reconciles against the broker first, so a restart can't duplicate a position.
 
 This is the dashboard. Read the funnel downward. Eight spreads cleared the edge gate. One was selected. One survived all eight risk gates. And zero were sent, because the market was closed. Every row says dry run, and I've left it that way.
 

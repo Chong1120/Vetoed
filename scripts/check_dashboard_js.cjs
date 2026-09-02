@@ -168,6 +168,43 @@ for (const must of ["1,782", "1,029", "open interest below", "QQQ", "$1.42"]) {
   }
 }
 
-console.log("  dashboard: all 7 panels render, all " + FILTERS.length +
-            " filters render, screened-out row renders (" +
-            data.decisions.length + " decisions, " + data.positions.length + " spreads)");
+// The reasoning panel only builds when someone presses the button, so
+// nothing above this line has ever executed askAgent. Drive it directly,
+// once with an answer and once with the endpoint refusing.
+async function checkAgentPanel(reply, expect, label) {
+  const chat = {hidden: true, dataset: {}, innerHTML: ""};
+  const wrap = {querySelector: () => chat, classList: {toggle(){}}};
+  const btn = {
+    parentElement: wrap,
+    dataset: {note: "SPY260904C00769000", q: "Why did you open this position?"},
+    setAttribute(){},
+  };
+  ctx.fetch = () => Promise.resolve(reply);
+  vm.runInContext("NOTES", ctx).clear();
+  await ctx.askAgent(btn);
+  if (chat.hidden) { console.error(label + ": panel stayed closed"); process.exit(1); }
+  for (const must of expect) {
+    if (!chat.innerHTML.includes(must)) {
+      console.error(label + ": missing '" + must + "'");
+      console.error(chat.innerHTML.slice(0, 400));
+      process.exit(1);
+    }
+  }
+  // Pressing again must close it, not re-ask.
+  await ctx.askAgent(btn);
+  if (!chat.hidden) { console.error(label + ": second press did not close"); process.exit(1); }
+}
+
+(async () => {
+  await checkAgentPanel(
+    {ok: true, json: () => Promise.resolve({explanation: "I measured the edge at $25.96 per spread."})},
+    ["Why did you open this position?", "$25.96", "ai-msg bot"], "agent panel");
+  await checkAgentPanel(
+    {ok: false, json: () => Promise.resolve(null)},
+    ["can't reach my reasoning"], "agent panel (endpoint down)");
+
+  console.log("  dashboard: all 7 panels render, all " + FILTERS.length +
+            " filters render, screened-out row renders, " +
+            "AI reasoning panel opens (" + data.decisions.length +
+            " decisions, " + data.positions.length + " spreads)");
+})();
