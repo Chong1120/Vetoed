@@ -69,6 +69,31 @@
      element toggled with .hidden cannot inherit the same fault. */
   [hidden] { display: none !important; }
 
+  /* Jump bar. The decision log is the longest panel and sits last, so reaching
+     it from the equity curve meant scrolling past everything between. Sticky,
+     because the reader wants it most when they are already deep in the page.
+     scroll-margin-top on the targets keeps a heading from landing underneath
+     the bar that just scrolled the reader to it. */
+  .jump {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; gap: 6px; flex-wrap: wrap;
+    padding: 9px 22px; background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  }
+  .jump a {
+    padding: 5px 13px; border-radius: 999px; text-decoration: none;
+    font-size: 11.5px; color: var(--muted); border: 1px solid transparent;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .jump a:hover { color: var(--text); border-color: var(--line); }
+  .jump a.here { color: var(--accent); border-color: var(--accent-dk);
+                 background: var(--raised); }
+  .jump a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  main > section, main > .kpis { scroll-margin-top: 58px; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
   .ai-chat {
     margin-top: 9px; padding: 13px 14px; max-width: 68ch;
     background: var(--raised); border: 1px solid var(--line);
@@ -279,6 +304,55 @@
   .base-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 4; opacity: .55; }
   .axis-text { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
 
+  /* The high-water mark. Recessive on purpose - it is a reference the equity
+     line is read AGAINST, so drawdown is the gap beneath it. Giving it the
+     same weight as the account would make the chart look like two accounts. */
+  .hwm-line { stroke: var(--muted); stroke-width: 1; opacity: .38; }
+  .cross-line { stroke: var(--accent); stroke-width: 1; opacity: .55; }
+  .cross-dot { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
+
+  .rangerow { display: flex; gap: 5px; padding: 0 16px 2px; }
+  .rbtn {
+    padding: 3px 11px; border-radius: 999px; border: 1px solid transparent;
+    background: none; color: var(--muted); font: inherit; font-size: 11px;
+    cursor: pointer; transition: color .15s, border-color .15s;
+  }
+  .rbtn:hover { color: var(--text); border-color: var(--line); }
+  .rbtn.on { color: var(--accent); border-color: var(--accent-dk);
+             background: var(--raised); }
+  .rbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .chartwrap { position: relative; }
+  #chart-hit { cursor: crosshair; }
+  #chart-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .charttip {
+    position: absolute; top: 10px; pointer-events: none; z-index: 5;
+    min-width: 148px; padding: 8px 10px; border-radius: 8px;
+    background: var(--raised); border: 1px solid var(--line);
+    box-shadow: 0 6px 20px rgba(0,0,0,.42); font-size: 11.5px;
+  }
+  .charttip .twhen {
+    color: var(--muted); font-family: var(--mono); font-size: 10px;
+    padding-bottom: 5px; margin-bottom: 5px; border-bottom: 1px solid var(--line);
+  }
+  .charttip .trow { display: flex; justify-content: space-between; gap: 14px; }
+  .charttip .tk { color: var(--muted); }
+  /* The value leads, the label follows - the reader already knows which
+     series they are on and wants the number. */
+  .charttip .tv { font-family: var(--mono); font-weight: 600; color: var(--text); }
+  .c-profit { color: var(--profit); }
+  .c-loss { color: var(--loss); }
+
+  .cstats {
+    display: flex; flex-wrap: wrap; gap: 20px;
+    padding: 9px 16px 13px; border-top: 1px solid var(--line);
+  }
+  .cstat { display: flex; flex-direction: column; gap: 2px; }
+  .cstat .k { font-size: 10px; color: var(--muted); text-transform: uppercase;
+              letter-spacing: .07em; }
+  .cstat .v { font-family: var(--mono); font-size: 13px; font-weight: 600;
+              color: var(--text); }
+
   /* ---------------- funnel ---------------- */
   .funnel { display: grid; gap: 11px; }
   .fn-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
@@ -340,6 +414,21 @@
   .rejlab { position: relative; font-size: 11.5px; color: var(--muted); }
   /* A count is a statistic; a named contract with the number that failed is
      the agent showing its work. Indented under the reason it belongs to. */
+  /* Collapsed by default. Expanded, one cycle's breakdown is seven reasons and
+     twenty-odd named contracts - which is the point of it, and far too much to
+     sit open on every row of a scrolling log. The headline count stays visible
+     so a reader knows what they would be opening. */
+  .rejwrap { margin-top: 7px; }
+  .rejmore {
+    cursor: pointer; font-size: 11.5px; color: var(--text-dim);
+    list-style: none; display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px;
+  }
+  .rejmore::-webkit-details-marker { display: none; }
+  .rejmore::before { content: "B8"; font-size: 9px; color: var(--accent); }
+  .rejwrap[open] .rejmore::before { content: "BE"; }
+  .rejmore:hover { border-color: var(--accent-dk); color: var(--text); }
+
   .rejeg { margin: 1px 0 5px 50px; display: flex; flex-direction: column;
            gap: 1px; font-size: 10.8px; color: var(--muted); opacity: .78; }
 
@@ -364,13 +453,26 @@
   <div class="status" id="status"></div>
 </header>
 
+<nav class="jump" id="jump" aria-label="Jump to section">
+  <a href="#sec-equity">Equity</a>
+  <a href="#sec-vol">Volatility</a>
+  <a href="#sec-open">Open</a>
+  <a href="#sec-closed">Closed</a>
+  <a href="#sec-decisions">Decisions</a>
+</nav>
+
 <main>
   <div class="kpis" id="kpis"></div>
 
-  <section class="grid2">
+  <section class="grid2" id="sec-equity">
     <div class="card">
       <h2>Equity curve <span class="hint" id="chart-hint"></span></h2>
-      <div class="body"><svg class="chart" id="chart" preserveAspectRatio="none"></svg></div>
+      <div class="rangerow" id="chart-range"></div>
+      <div class="body chartwrap">
+        <svg class="chart" id="chart" preserveAspectRatio="none"></svg>
+        <div class="charttip" id="chart-tip" hidden></div>
+      </div>
+      <div class="cstats" id="chart-stats"></div>
     </div>
 
     <div class="card">
@@ -381,22 +483,22 @@
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" id="sec-vol">
     <h2>Volatility by underlying <span class="hint">implied vs realised &mdash; where the premium is</span></h2>
     <div class="body"><div class="vols" id="vols"></div></div>
   </section>
 
-  <section class="card">
+  <section class="card" id="sec-open">
     <h2>Open positions</h2>
     <div id="positions"></div>
   </section>
 
-  <section class="card">
+  <section class="card" id="sec-closed">
     <h2>Closed positions <span class="hint">what they returned, and why they ended</span></h2>
     <div id="closed"></div>
   </section>
 
-  <section class="card">
+  <section class="card" id="sec-decisions">
     <h2>Decisions <span class="hint">including every one the risk gates vetoed</span></h2>
     <div id="decisions"></div>
     <div class="legend"><b>Edge</b> = the same spread priced at realised volatility
@@ -624,18 +726,136 @@ function kpis(s, orders, broker, live) {
    the same account at 15-minute resolution, and it is the broker's record
    rather than our reading of it. Falls back to the journal when no live
    source answers, which is always a valid view. */
+/* THE EQUITY CURVE.
+   It was a line, a fill and four gridlines - the shape of the account and
+   nothing you could interrogate. A reader could see it went up; they could not
+   read the value at any point, find the peak, or see what was given back on
+   the way. This adds the three things a broker chart has and this did not: a
+   crosshair that reports the exact point under the pointer, a high-water mark
+   so drawdown is visible as the gap beneath it, and range presets.
+
+   The high-water mark is a second SERIES, not a second axis - it is dollars on
+   the same scale as equity, so it shares the one y-axis. Drawdown as a percent
+   would need its own scale, and a second y-axis is the one thing a chart must
+   never have; it lives in the readout and the stat strip instead. */
+const RANGES = [["all", "All"], ["30d", "30D"], ["7d", "7D"], ["1d", "24H"]];
+let CHART = { rows: [], range: "all", fromBroker: false, geom: null };
+
+/* The crosshair snaps to the nearest point, so the reader aims at a date
+   rather than at a two-pixel line. Keyboard gets the same readout as the
+   pointer - arrow keys walk the series - because a chart whose only value
+   readout is a hover is a chart some readers cannot read at all. */
+function wireCrosshair() {
+  const hit = $("chart-hit"), g = $("cross"), tip = $("chart-tip");
+  const G = CHART.geom;
+  if (!hit || !g || !G) return;
+  let idx = -1;
+
+  const show = i => {
+    if (i < 0 || i >= G.rows.length) return;
+    idx = i;
+    const v = G.vals[i], px = G.x(i), py = G.y(v);
+    g.style.display = "";
+    g.querySelector(".cross-line").setAttribute("x1", px);
+    g.querySelector(".cross-line").setAttribute("x2", px);
+    const dot = g.querySelector(".cross-dot");
+    dot.setAttribute("cx", px); dot.setAttribute("cy", py);
+    if (!tip) return;
+    const chg = v - G.base, dd = G.peaks[i] > 0 ? (G.peaks[i] - v) / G.peaks[i] : 0;
+    // textContent, not innerHTML - these values are journal data.
+    tip.innerHTML = "";
+    const add = (k, val, cls) => {
+      const row = document.createElement("div");
+      row.className = "trow";
+      const a = document.createElement("span"); a.className = "tk"; a.textContent = k;
+      const b = document.createElement("span");
+      b.className = "tv" + (cls ? " " + cls : ""); b.textContent = val;
+      row.appendChild(a); row.appendChild(b); tip.appendChild(row);
+    };
+    const when = document.createElement("div");
+    when.className = "twhen"; when.textContent = shortTs(G.rows[i].ts) + " UTC";
+    tip.appendChild(when);
+    add("equity", money(v), "");
+    add("vs start", (chg >= 0 ? "+" : "") + money(chg), chg >= 0 ? "c-profit" : "c-loss");
+    add("off peak", dd > 0 ? "-" + (dd * 100).toFixed(2) + "%" : "at high", dd > 0 ? "c-loss" : "");
+    if (G.rows[i].open_positions != null) add("open", String(G.rows[i].open_positions), "");
+    tip.hidden = false;
+    // Keep it inside the card rather than letting it run off the right edge.
+    const frac = (px - G.L) / (G.W - G.L - G.R);
+    tip.style.left = (frac * 100).toFixed(1) + "%";
+    tip.style.transform = "translateX(" + (frac > 0.62 ? "-100%" : "0") + ")";
+  };
+  const hide = () => { g.style.display = "none"; if (tip) tip.hidden = true; idx = -1; };
+
+  const at = ev => {
+    const r = hit.getBoundingClientRect();
+    if (!r.width) return;
+    const frac = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+    show(Math.round(frac * (G.rows.length - 1)));
+  };
+  hit.addEventListener("pointermove", at);
+  hit.addEventListener("pointerdown", at);
+  hit.addEventListener("pointerleave", hide);
+  hit.addEventListener("blur", hide);
+  hit.addEventListener("focus", () => show(idx < 0 ? G.rows.length - 1 : idx));
+  hit.addEventListener("keydown", ev => {
+    if (ev.key === "ArrowLeft") { show(Math.max(0, idx - 1)); ev.preventDefault(); }
+    else if (ev.key === "ArrowRight") { show(Math.min(G.rows.length - 1, idx + 1)); ev.preventDefault(); }
+    else if (ev.key === "Home") { show(0); ev.preventDefault(); }
+    else if (ev.key === "End") { show(G.rows.length - 1); ev.preventDefault(); }
+    else if (ev.key === "Escape") hide();
+  });
+}
+
+function chartRange(rows, range) {
+  if (range === "all" || !rows.length) return rows;
+  const days = { "30d": 30, "7d": 7, "1d": 1 }[range] || 0;
+  const end = Date.parse(rows[rows.length - 1].ts);
+  if (!days || isNaN(end)) return rows;
+  const cut = end - days * 864e5;
+  const kept = rows.filter(r => Date.parse(r.ts) >= cut);
+  // Never render an empty chart because a preset outran the data. Two points
+  // is the minimum that draws a line; below that, show everything.
+  return kept.length >= 2 ? kept : rows;
+}
+
 function chart(rows, fromBroker) {
-  const svg = $("chart");
-  if (!rows.length) {
+  if (rows) { CHART.rows = rows; CHART.fromBroker = !!fromBroker; }
+  drawChart();
+}
+
+function drawChart() {
+  const svg = $("chart"), all = CHART.rows;
+  const host = $("chart-range");
+  if (host) {
+    host.innerHTML = RANGES.map(([k, label]) =>
+      `<button type="button" class="rbtn${CHART.range === k ? " on" : ""}"
+               data-range="${k}" aria-pressed="${CHART.range === k}">${label}</button>`).join("");
+    for (const b of host.querySelectorAll(".rbtn")) {
+      b.addEventListener("click", () => { CHART.range = b.dataset.range; drawChart(); });
+    }
+  }
+  if (!all.length) {
     $("chart-hint").textContent = "";
+    if ($("chart-stats")) $("chart-stats").innerHTML = "";
     svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle" class="axis-text"
       style="font-size:12px">No equity snapshots yet &mdash; run the agent</text>`;
     return;
   }
+  const rows = chartRange(all, CHART.range);
   const W = 800, H = 232, L = 62, R = 14, T = 16, B = 26;
   const vals = rows.map(r => Number(r.equity));
   const base = vals[0], last = vals[vals.length - 1];
-  let lo = Math.min(...vals, base), hi = Math.max(...vals, base);
+
+  // High-water mark, and the worst give-back from it.
+  const peaks = []; let run = -Infinity, maxDD = 0, ddAt = 0;
+  vals.forEach((v, i) => {
+    run = Math.max(run, v); peaks.push(run);
+    const dd = run > 0 ? (run - v) / run : 0;
+    if (dd > maxDD) { maxDD = dd; ddAt = i; }
+  });
+
+  let lo = Math.min(...vals, base), hi = Math.max(...peaks, base);
   if (hi === lo) { lo -= Math.max(lo * 0.001, 1); hi += Math.max(hi * 0.001, 1); }
   const padY = (hi - lo) * 0.15; lo -= padY; hi += padY;
 
@@ -644,8 +864,10 @@ function chart(rows, fromBroker) {
   const y = v => T + (hi - v) * (H - T - B) / (hi - lo);
   const up = last >= base;
   const stroke = up ? "var(--profit)" : "var(--loss)";
+  CHART.geom = { rows, vals, peaks, x, y, W, H, L, R, T, B, base };
 
   const pts = rows.map((r, i) => `${x(i).toFixed(1)},${y(vals[i]).toFixed(1)}`).join(" ");
+  const hwm = rows.map((r, i) => `${x(i).toFixed(1)},${y(peaks[i]).toFixed(1)}`).join(" ");
   const area = `${L},${y(lo)} ` + pts + ` ${x(rows.length - 1)},${y(lo)}`;
 
   const ticks = 4;
@@ -669,14 +891,33 @@ function chart(rows, fromBroker) {
     <polygon points="${area}" fill="url(#fill)"/>
     <line class="base-line" x1="${L}" y1="${y(base)}" x2="${W - R}" y2="${y(base)}"/>
     <text class="axis-text" x="${W - R}" y="${y(base) - 5}" text-anchor="end">start</text>
+    <polyline class="hwm-line" fill="none" points="${hwm}"/>
     <polyline fill="none" stroke="${stroke}" stroke-width="2"
-              stroke-linejoin="round" points="${pts}"/>
+              stroke-linejoin="round" stroke-linecap="round" points="${pts}"/>
     <circle cx="${x(rows.length - 1)}" cy="${y(last)}" r="3.5" fill="${stroke}"/>
     <text class="axis-text" x="${L}" y="${H - 8}">${first}</text>
-    <text class="axis-text" x="${W - R}" y="${H - 8}" text-anchor="end">${lastT}</text>`;
-  // Say whose numbers these are. A curve drawn from our journal and one drawn
-  // from the broker are different claims, and the reader should know which.
-  $("chart-hint").innerHTML = fromBroker
+    <text class="axis-text" x="${W - R}" y="${H - 8}" text-anchor="end">${lastT}</text>
+    <g id="cross" style="display:none" pointer-events="none">
+      <line class="cross-line" y1="${T}" y2="${H - B}"/>
+      <circle class="cross-dot" r="4"/>
+    </g>
+    <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}"
+          fill="transparent" id="chart-hit" tabindex="0"
+          aria-label="Equity curve. Use arrow keys to read each point."/>`;
+
+  wireCrosshair();
+  const peak = Math.max(...vals);
+  if ($("chart-stats")) {
+    $("chart-stats").innerHTML = [
+      ["now", money(last), up ? "profit" : "loss"],
+      ["peak", money(peak), ""],
+      ["max drawdown", "-" + (maxDD * 100).toFixed(2) + "%", maxDD > 0 ? "loss" : ""],
+      ["return", ((last - base) / base * 100).toFixed(2) + "%", up ? "profit" : "loss"],
+    ].map(([k, v, c]) =>
+      `<div class="cstat"><span class="k">${k}</span>
+        <span class="v ${c ? "c-" + c : ""}">${v}</span></div>`).join("");
+  }
+  $("chart-hint").innerHTML = CHART.fromBroker
     ? `${rows.length} points &middot; 15 min, from Alpaca`
     : `${rows.length} snapshot${rows.length === 1 ? "" : "s"} &middot; one per cycle`;
 }
@@ -1050,6 +1291,36 @@ async function askAgent(btn) {
       <div class="ai-msg bot">${text ? esc(text)
         : "I can't reach my reasoning for this position right now."}</div></div>
     <div class="ai-foot">written by the agent from its own journal entry</div>`;
+}
+
+/* Mark which section the reader is actually in.
+   A jump bar that never shows where you are is a row of links; the highlight
+   is what makes it a position indicator. rootMargin pulls the trigger line to
+   just under the sticky bar, so a section counts as current when its heading
+   reaches the bar rather than when its last pixel leaves the viewport. */
+function wireJump() {
+  const bar = document.getElementById("jump");
+  if (!bar || typeof IntersectionObserver !== "function") return;
+  const links = new Map();
+  for (const a of bar.querySelectorAll("a")) {
+    links.set(a.getAttribute("href").slice(1), a);
+  }
+  const seen = new Set();
+  const mark = () => {
+    for (const [id, a] of links) a.classList.toggle("here", seen.has(id) && first() === id);
+  };
+  const order = [...links.keys()];
+  const first = () => order.find(id => seen.has(id));
+  const io = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (e.isIntersecting) seen.add(e.target.id); else seen.delete(e.target.id);
+    }
+    mark();
+  }, { rootMargin: "-58px 0px -55% 0px" });
+  for (const id of links.keys()) {
+    const el = document.getElementById(id);
+    if (el) io.observe(el);
+  }
 }
 
 function wireNotes(root) {
@@ -1485,6 +1756,8 @@ function render() {
         <td class="mono dim">${NB}</td>
         <td><span class="pill">${grp(e.rejected)} rejected</span></td>
         <td class="rationale">Measured the chains and declined every spread below.
+          <details class="rejwrap">
+          <summary class="rejmore">${e.by_reason.length} reasons &mdash; show the breakdown</summary>
           <div class="rejbars">
             ${top.map(r => `<div class="rejrow">
               <span class="rejbar" style="width:${worst ? Math.max(3, r.count / worst * 100) : 0}%"></span>
@@ -1495,6 +1768,7 @@ function render() {
               ${r.examples.map(x => `<div class="mono">${esc(x)}</div>`).join("")}
             </div>` : ""}`).join("")}
           </div>
+          </details>
           ${(e.near_misses || []).length ? `<details style="margin-top:7px">
             <summary class="sub dim" style="cursor:pointer">
               show the ${e.near_misses.length} it measured in full and still declined
@@ -1660,6 +1934,7 @@ async function triggerManualRefresh() {
 }
 
 (async () => {
+  wireJump();
   MODE = await detectMode();
   await refresh();
   // Auto-sync in background: 15s on live server, 30s on static GitHub Pages.

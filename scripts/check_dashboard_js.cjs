@@ -197,6 +197,42 @@ async function checkAgentPanel(reply, expect, label) {
   if (!chat.hidden) { console.error(label + ": second press did not close"); process.exit(1); }
 }
 
+// The chart gained a crosshair, a high-water mark and range presets, none of
+// which the panel loop above can see - it only asserts the panel rendered
+// something. Check the parts are actually there, and that a range preset
+// changes what is plotted rather than silently doing nothing.
+{
+  const svg = els.chart.innerHTML;
+  for (const must of ["hwm-line", "cross-line", "chart-hit", "grid-line"]) {
+    if (!svg.includes(must)) {
+      console.error("CHART MISSING '" + must + "'");
+      process.exit(1);
+    }
+  }
+  const C = vm.runInContext("CHART", ctx);
+  const full = C.geom ? C.geom.rows.length : 0;
+  C.range = "1d";
+  ctx.drawChart();
+  const day = C.geom ? C.geom.rows.length : 0;
+  // Only assert narrowing when the fixture actually spans more than a day -
+  // otherwise "24H" legitimately equals "All" and the check would be a lie.
+  // Equality is the failure worth catching: a range function that quietly
+  // returns everything looks exactly like one that works.
+  const span = Date.parse(data.equity[data.equity.length - 1].ts)
+             - Date.parse(data.equity[0].ts);
+  if (!full || !day) {
+    console.error("CHART RANGE produced nothing: all=" + full + " 1d=" + day);
+    process.exit(1);
+  }
+  if (span > 864e5 && day >= full) {
+    console.error("CHART RANGE did not narrow: all=" + full + " 1d=" + day
+                  + " over " + (span / 864e5).toFixed(1) + " days of data");
+    process.exit(1);
+  }
+  C.range = "all";
+  ctx.drawChart();
+}
+
 // The VM has no CSS, so it cannot catch a panel that opens and never closes.
 // This is the static half: anything toggled with .hidden in the script needs
 // an author-level [hidden] rule, because a class setting display beats the
@@ -242,6 +278,6 @@ async function checkNoteDedupe() {
 
   console.log("  dashboard: all 7 panels render, all " + FILTERS.length +
             " filters render, screened-out row renders, " +
-            "AI reasoning panel opens, one request per note (" + data.decisions.length +
+            "AI reasoning panel opens, one request per note, chart ranges narrow (" + data.decisions.length +
             " decisions, " + data.positions.length + " spreads)");
 })();
