@@ -1771,14 +1771,21 @@ function exitEvents(closed) {
   }));
 }
 
-/* A decision row with no candidate and no trade taken. The model call failed,
-   the agent took no action, and the row has nothing in any column that means
-   anything - dashes for candidate and edge, 0.00 confidence, N/A. */
+/* A row with no candidate is not a decision about anything.
+
+   There are two kinds and the first version of this only caught one. A model
+   call that failed leaves llm_action "no_trade"; a cycle where the screener
+   found nothing leaves it NULL and an outcome of "no candidates". Requiring
+   the string "no_trade" let the second kind straight through, so rows reading
+   "- - - - N/A  NOTHING CLEARED THE GATE" kept appearing after I had said
+   they were gone.
+
+   The candidate is the test. No candidate, no decision, no row - whatever the
+   action says. Both facts are still in the cycle note and in llm_error. */
 function isEmptyNoTrade(d) {
   if (!d || d._exit || d._screen || d._screenOld) return false;
   const c = d.candidate_json;
-  const hasCandidate = c && (c.underlying || c.short_symbol);
-  return !hasCandidate && String(d.llm_action || "") === "no_trade";
+  return !(c && (c.underlying || c.short_symbol));
 }
 
 function decisions(rows, runs, orders, closed) {

@@ -278,6 +278,30 @@ async function checkAgentPanel(reply, expect, label) {
     }
   }
 
+  // No row without a candidate may survive the filter, whatever its action
+  // says. The first version tested llm_action === "no_trade" and missed the
+  // rows where the screener found nothing, which carry action NULL.
+  {
+    const shapes = [
+      { ts: "2026-09-03T18:05:00Z", llm_action: null, outcome: "no candidates" },
+      { ts: "2026-09-03T16:11:00Z", llm_action: "no_trade", llm_confidence: 0 },
+      { ts: "2026-09-03T15:00:00Z", llm_action: "", candidate_json: {} },
+      { ts: "2026-09-03T14:00:00Z", candidate_json: null },
+    ];
+    for (const d of shapes) {
+      if (!ctx.isEmptyNoTrade(d)) {
+        console.error("EMPTY DECISION ROW NOT FILTERED: " + JSON.stringify(d));
+        process.exit(1);
+      }
+    }
+    const real = { ts: "2026-09-03T17:02:00Z", llm_action: "open_spread",
+                   candidate_json: { underlying: "QQQ", short_symbol: "QQQ260911C00725000" } };
+    if (ctx.isEmptyNoTrade(real)) {
+      console.error("A REAL DECISION WAS FILTERED OUT");
+      process.exit(1);
+    }
+  }
+
   // The very first point cannot have made money: it IS the starting balance.
   // Measuring profit from the first point IN VIEW rather than from inception
   // made the tooltip announce a six-figure gain at the moment the account
