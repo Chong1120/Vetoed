@@ -231,3 +231,42 @@ def test_unparseable_model_output_falls_back_instead_of_skipping():
         "unparseable output gave %r instead of falling back" % d.action)
     assert d.error, "the parse error must still be journalled"
     assert d.raw, "the raw model output must still be journalled"
+
+
+def test_closing_never_touches_a_row_that_did_not_fill():
+    """A broker order id is not unique in this table.
+
+    The executor reuses a deterministic client_order_id across retries and
+    records every attempt, so one AAPL fill shared its alpaca_order_id with a
+    not_filled retry. close_order matched on the id alone and closed both, and
+    the same trade appeared twice in the closed table - $473 counted twice in
+    a realised total that read +$67 when it was really -$406.
+    """
+    import os
+    import tempfile
+    from agent import journal
+
+    db = os.path.join(tempfile.mkdtemp(), "t.db")
+    journal.init(db)
+    oid = "00ef4c69-a24c-4787-a8c5-526056878328"
+    cand = {"underlying": "AAPL", "kind": "put_credit",
+            "short_symbol": "AAPL260911P00305000",
+            "long_symbol": "AAPL260911P00300000", "credit": 0.86,
+            "short_delta": -0.22, "dte": 11}
+    filled = journal.record_order(
+        decision_id=None, candidate=cand, contracts=11, limit_price=0.86,
+        max_loss_total=4614.0,
+        result={"status": "filled", "id": oid, "client_order_id": "vetoed-x"},
+        path=db)
+    retry = journal.record_order(
+        decision_id=None, candidate=cand, contracts=11, limit_price=0.86,
+        max_loss_total=4614.0,
+        result={"status": "not_filled", "id": oid, "client_order_id": "vetoed-x"},
+        path=db)
+
+    journal.close_order(oid, 473.0, reason="take profit", path=db)
+    rows = {o["id"]: o for o in journal.all_orders(50, path=db)}
+    assert rows[filled]["closed_ts"], "the filled row should be closed"
+    assert rows[retry]["closed_ts"] is None, (
+        "a not_filled retry was closed too - the trade is counted twice")
+    assert rows[retry]["realised_pnl"] is None

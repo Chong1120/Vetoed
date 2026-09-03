@@ -341,9 +341,18 @@ def close_order(alpaca_order_id: str | None, realised_pnl: float | None,
     """
     with connect(path) as c:
         if alpaca_order_id:
+            # Only rows that actually filled. A broker id is NOT unique in this
+            # table: the executor reuses a deterministic client_order_id across
+            # retries and records each attempt, so one AAPL fill shared its
+            # alpaca_order_id with a not_filled retry. Closing on the id alone
+            # closed both, and the same trade appeared twice in the closed
+            # table - counted twice in the realised total, +$473 of a $67 figure
+            # that was really -$406.
+            dead = ",".join("?" for _ in DEAD_STATUSES)
             c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=? "
-                      "WHERE alpaca_order_id=?",
-                      (now(), realised_pnl, reason or None, alpaca_order_id))
+                      "WHERE alpaca_order_id=? AND status NOT IN (%s)" % dead,
+                      (now(), realised_pnl, reason or None, alpaca_order_id)
+                      + tuple(DEAD_STATUSES))
         elif row_id is not None:
             c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=? "
                       "WHERE id=?",

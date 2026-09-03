@@ -88,7 +88,12 @@ def closed_positions(limit: int = 50) -> list[dict]:
     had ever fired was a line buried in a cycle note.
     """
     journal.init()
-    rows = [o for o in journal.all_orders(500) if o.get("closed_ts")]
+    # A row that never filled is not a closed trade, whatever timestamp it
+    # carries. Belt to close_order's braces: if a dead row is ever marked
+    # closed again, it still cannot reach the panel or the realised total.
+    rows = [o for o in journal.all_orders(500)
+            if o.get("closed_ts")
+            and str(o.get("status") or "") not in journal.DEAD_STATUSES]
     out = []
     for o in rows:
         credit = float(o.get("credit") or 0) * 100 * int(o.get("contracts") or 0)
