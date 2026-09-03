@@ -42,8 +42,13 @@ def summary() -> dict:
 
     start = curve[0]["equity"] if curve else None
     latest = curve[-1]["equity"] if curve else None
+    # Only trades that actually happened. The KPI row read +$67.00 while the
+    # closed panel below it read -$406.00, because a not_filled retry carried
+    # the same +$473 as the fill it shadowed and this sum counted both. The
+    # closed panel already filters this way; the headline figure did not.
     realised = sum(float(o["realised_pnl"] or 0) for o in orders
-                   if o.get("realised_pnl") is not None)
+                   if o.get("realised_pnl") is not None
+                   and str(o.get("status") or "") not in journal.DEAD_STATUSES)
     filled = [o for o in orders if (o.get("filled_qty") or 0) > 0]
 
     return {

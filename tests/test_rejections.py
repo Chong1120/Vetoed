@@ -270,3 +270,71 @@ def test_closing_never_touches_a_row_that_did_not_fill():
     assert rows[retry]["closed_ts"] is None, (
         "a not_filled retry was closed too - the trade is counted twice")
     assert rows[retry]["realised_pnl"] is None
+
+
+def test_confirming_a_fill_never_resurrects_a_dead_retry():
+    """update_order_status keys on a broker id that is not unique.
+
+    The executor reuses a deterministic client_order_id across retries and
+    journals every attempt, so one fill shares its alpaca_order_id with a
+    not_filled retry. Confirming the fill must not flip the retry to filled -
+    that would put a spread that never existed into the open book, counting
+    against the concurrency limit and against capital at risk.
+    """
+    import os
+    import tempfile
+    from agent import journal
+
+    db = os.path.join(tempfile.mkdtemp(), "t.db")
+    journal.init(db)
+    oid = "00ef4c69-a24c-4787-a8c5-526056878328"
+    cand = {"underlying": "AAPL", "kind": "put_credit",
+            "short_symbol": "AAPL260911P00305000",
+            "long_symbol": "AAPL260911P00300000", "credit": 0.86,
+            "short_delta": -0.22, "dte": 11}
+    live = journal.record_order(
+        decision_id=None, candidate=cand, contracts=11, limit_price=0.86,
+        max_loss_total=4614.0,
+        result={"status": "pending_new", "id": oid, "client_order_id": "v-x"},
+        path=db)
+    dead = journal.record_order(
+        decision_id=None, candidate=cand, contracts=11, limit_price=0.86,
+        max_loss_total=4614.0,
+        result={"status": "not_filled", "id": oid, "client_order_id": "v-x"},
+        path=db)
+
+    journal.update_order_status(oid, "filled", path=db)
+    rows = {o["id"]: o for o in journal.all_orders(50, path=db)}
+    assert rows[live]["status"] == "filled"
+    assert rows[dead]["status"] == "not_filled", (
+        "a not_filled retry was resurrected as filled - phantom open position")
+
+
+def test_the_headline_realised_figure_excludes_rows_that_never_filled(monkeypatch):
+    """The KPI row and the closed panel must not disagree.
+
+    The KPI row read +$67.00 while the panel below it read -$406.00: a
+    not_filled retry carried the same +$473 as the fill it shadowed, and only
+    the panel filtered it out. This drives payload.summary() itself - an
+    earlier version of this test recomputed the sum inline and therefore
+    passed even with the real function broken.
+    """
+    from agent import journal
+    from dashboard import payload
+
+    rows = [
+        {"id": 1, "status": "filled", "realised_pnl": 473.0, "filled_qty": 11,
+         "closed_ts": "2026-09-01T14:56:29+00:00"},
+        {"id": 2, "status": "not_filled", "realised_pnl": 473.0, "filled_qty": 0,
+         "closed_ts": "2026-09-01T14:56:29+00:00"},
+    ]
+    monkeypatch.setattr(journal, "init", lambda *a, **k: None)
+    monkeypatch.setattr(journal, "equity_curve", lambda *a, **k: [])
+    monkeypatch.setattr(journal, "all_orders", lambda *a, **k: rows)
+    monkeypatch.setattr(journal, "open_spreads", lambda *a, **k: [])
+    monkeypatch.setattr(journal, "recent_runs", lambda *a, **k: [])
+
+    out = payload.summary()
+    assert out["realised_pnl"] == 473.0, (
+        "the headline figure counted a row that never filled: %s"
+        % out["realised_pnl"])

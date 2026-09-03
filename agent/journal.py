@@ -259,10 +259,22 @@ def update_order_status(alpaca_order_id: str | None, status: str,
     """
     with connect(path) as c:
         if alpaca_order_id:
+            # Same guard as close_order, for the same reason: a broker id is
+            # NOT unique here. The executor reuses a deterministic
+            # client_order_id across retries and journals every attempt, so
+            # one AAPL fill shares its alpaca_order_id with a retry that never
+            # filled. Without this, confirming that fill would flip the dead
+            # retry to "filled" too - putting a spread that never existed into
+            # the open book, where it counts against the concurrency limit and
+            # inflates capital at risk, so the agent would refuse a real trade
+            # to make room for a phantom one.
+            dead = ",".join("?" for _ in DEAD_STATUSES)
             c.execute(
                 "UPDATE orders SET status=?, filled_qty=COALESCE(?, filled_qty),"
-                " fill_price=COALESCE(?, fill_price) WHERE alpaca_order_id=?",
-                (status, filled_qty, fill_price, alpaca_order_id))
+                " fill_price=COALESCE(?, fill_price)"
+                " WHERE alpaca_order_id=? AND status NOT IN (%s)" % dead,
+                (status, filled_qty, fill_price, alpaca_order_id)
+                + tuple(DEAD_STATUSES))
         elif row_id is not None:
             c.execute(
                 "UPDATE orders SET status=?, filled_qty=COALESCE(?, filled_qty),"
