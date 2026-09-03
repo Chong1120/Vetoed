@@ -1,146 +1,115 @@
-[1]
-Most A.I. trading agents give a language model the keys, and hope it behaves. This one does the opposite. It's called Vetoed, it trades options on Alpaca paper, and the A.I. is the least trusted component in it.
+[1 — DECK slide 1]
+Most A.I. trading agents give a language model the keys, and hope it behaves. This one does the opposite.
+
+It's called Vetoed. It trades options on Alpaca paper, and the A.I. is the least trusted component in it. On a normal cycle it measures about fifteen hundred spreads and refuses almost every one of them.
 
 <break time="0.8s" />
 
-[2]
-Here's the problem. If a model can pick the trade, decide the size, and send the order, then one hallucinated contract is a real loss. And you cannot unit test a language model.
+[2 — DECK slide 2]
+The problem is authority. If a model can pick the trade, decide the size, and send the order, then one hallucinated contract is a real loss. And you cannot unit test a language model.
 
 But you can unit test the code that decides whether to obey it.
 
-So in Vetoed, the model's entire authority is this: pick one item from a list it did not write. It cannot build a trade, choose a size, or send an order.
+So the model's entire authority is this: pick one item from a list it did not write.
 
 <break time="0.8s" />
 
-[3]
-The strategy is selling defined risk credit spreads. That means two option contracts, always together.
+[3 — DECK slide 3]
+The strategy is selling defined risk credit spreads. Two contracts, always together. We sell one option and buy a cheaper one further out, collect the difference as premium, and the one we bought caps the loss.
 
-In a put credit spread, we sell one put and buy a cheaper one further away. We collect the difference as premium, and the one we bought caps the loss. A call credit spread is the mirror image, for when we think a stock won't rise far.
-
-The important part is the second leg. The worst case is known before the order is ever sent.
+The second leg is the important part. The worst case is known before the order is ever sent.
 
 <break time="0.8s" />
 
-[4]
-Now, why volatility. There are two numbers that matter.
+[4 — DECK slide 4]
+Now, why volatility. Implied volatility is how much movement option prices are charging for. Realised volatility is how much the stock has actually been moving.
 
-Implied volatility is how much movement option prices are charging for. Realised volatility is how much the stock has actually been moving lately.
-
-On this screen, Apple's options were pricing about twenty four percent, while the stock had actually been moving about nineteen. A ratio of one point two six. Options priced for more movement than has been happening.
+On this screen, Apple's options were pricing about twenty four percent while the stock had been moving about nineteen. A ratio of one point two six — priced for more movement than has been happening.
 
 That gap is what a premium seller is trying to collect.
 
 <break time="1.0s" />
 
-[5]
+[5 — DECK slide 5]
 So Vetoed measures that gap directly. It takes one spread and prices it twice, through the same model, with the same payoff. The only thing that changes is which volatility goes in.
 
-Priced at realised volatility, that spread was worth about twenty eight dollars. Priced at the market's implied volatility, minus fourteen. The difference, about forty two dollars, is the signal.
+At realised volatility that spread was worth about twenty eight dollars. At the market's implied volatility, minus fourteen. The difference, about forty two dollars, is the signal.
 
-I want to be precise about what that is. It's our own model derived measure, motivated by volatility risk premium research. It is not the academic definition of the variance risk premium, which is a different thing measured a different way.
+I want to be precise about what that is. It's our own model derived measure, motivated by volatility risk premium research. It is not the academic variance risk premium, which is a different thing measured a different way.
 
 <break time="1.0s" />
 
-[6]
+[6 — DECK slide 6. The strongest slide. Do not rush it.]
 And here's the part I'm actually proud of. I caught my own agent lying.
 
-There was an I.W.M. trade where implied and realised volatility were almost identical. So there was essentially no gap to collect. The agent reported a healthy edge anyway.
+There was an I.W.M. trade where implied and realised volatility were almost identical, so there was essentially no gap to collect. The agent reported a healthy edge anyway.
 
 Two defects. One side of the calculation used delta as if it were a probability, and it isn't quite. And the payoff between the two strikes was approximated at its midpoint, which a lognormal distribution does not respect.
 
-Both of those changed real trade decisions, not just displayed numbers. On that trade, the honest figure is thirty four cents, which is below the gate, so the agent doesn't take it.
+Both changed real trade decisions, not just displayed numbers. On that trade the honest figure is thirty four cents, which is below the gate, so the agent doesn't take it.
 
 I found them, fixed them, and the test suite went from seventy seven to two hundred and thirty six.
 
 <break time="1.0s" />
 
-[7]
-The architecture is separation of powers. A deterministic screener decides what is structurally valid. A language model decides what looks attractive. And a deterministic risk module decides what is allowed, and can overrule the model at any confidence.
+[7 — DECK slide 7]
+The architecture is separation of powers. A deterministic screener decides what is structurally valid. The model decides what looks attractive. A deterministic risk module decides what is allowed, and can overrule the model at any confidence.
 
-The contracts the model sends back are checked against the shortlist, so an invented one is unexecutable. It returns a position size, and we throw that away. And if the model is unavailable, the agent keeps trading on arithmetic.
+Its contracts are checked against the shortlist, so an invented one is unexecutable. It returns a size, and we throw that away.
 
-Everything that reaches the broker goes through Alpaca's own M.C.P. server. That is the single write path in the system - one place where an order can be created, and every order that leaves it carries a deterministic identifier, so a restart cannot open the same spread twice.
-
-<break time="0.8s" />
-
-[8]
-Eight hard gates, and any single one rejects the trade outright.
-
-Five percent of equity at risk in any one position. A three percent daily loss halts the whole session. A hard cap of twenty five contracts, whatever the maths says. And zero naked positions, which is structurally impossible here because both legs move as one order.
+Everything that reaches the broker goes through Alpaca's own M.C.P. server — the single write path in the system. Every order carries a deterministic identifier, so a restart cannot open the same spread twice.
 
 <break time="0.8s" />
 
-[9]
-Here's a real screen. Of the spreads that reached the shortlist, twenty were structurally valid and seven survived every gate.
+[8 — DECK slide 8, then cut to slide 10 at "It learns from its own journal"]
+Eight hard gates, and any single one rejects the trade outright. Five percent of equity in any one position, twenty five percent across all of them, a three percent daily loss halts the session, and a hard cap of twenty five contracts whatever the maths says.
 
-Q.Q.Q. produced zero. Implied volatility was below realised, so there was nothing to be paid for, and the agent passed.
-
-That's the whole point. The agent isn't looking for trades. It's looking for paid risk.
+It learns from its own journal, but only toward restriction — three losses in a row bans an underlying — and never on fewer than five closed trades. It can learn, but it cannot learn its way around the risk controls.
 
 <break time="1.0s" />
 
-[10]
-It also learns from its own history, but on a very short leash.
+[9 — LIVE DASHBOARD. Switch to the browser here. Deck slides 9 and 11 are
+NOT used: slide 9 is what the demo shows better, and slide 11 is a static
+summary of the thing you are about to show running. Skip Volatility in the
+dashboard too - slides 4 and 5 already covered implied versus realised.]
 
-Every decision is journalled. Three losses in a row on one underlying, and it stops trading that underlying. A losing delta band gets narrowed.
+[9a — Top of page: the KPI row, then the equity curve.]
+This is it running, live. And the thing I want you to notice is that every number explains itself.
 
-But every adjustment is clamped against the defaults. It cannot increase size, it cannot loosen a hard limit, and it will not react to fewer than five closed trades.
+Equity isn't just a figure — it says "cash, plus what the positions are worth now". Capital at risk reads twenty one point four percent of equity, with "cap twenty five percent" printed beside it. Premium collected says "received up front", because it is not earned until the spread is closed. Open positions says "limit five concurrent". Nobody has to be told what any of these mean.
 
-It can learn, but it can't learn its way around the risk controls.
+The curve carries a high-water mark, so a fall from a peak is the gap beneath the line.
+
+<break time="0.7s" />
+
+[9b — Decisions, Screened out tab. THE differentiator. Expand one breakdown and let it sit on screen.]
+Now the part I most want you to see. Before a shortlist even exists, the agent measures the whole option chain across four underlyings — and on this cycle it rejected about fifteen hundred spreads.
+
+Eight reasons, and you can open the breakdown. Every rejection is counted by the reason that stopped it, naming real contracts: open interest under five hundred, premium under ten cents, delta outside nought point one to nought point three five, measured edge below two dollars.
+
+Those four numbers are the strategy. This is not an agent looking for a reason to trade. It spends almost all of its time declining.
+
+<break time="0.7s" />
+
+[9c — Closed positions. Press one AI reasoning panel and let it type.]
+Four closed, four profitable, two thousand and fifty four dollars realised.
+
+And look at how a closed trade reports itself. Take profit, plus six hundred and twenty four of eleven hundred and fifty eight maximum. Kept fifty four percent of premium. Twelve point nine percent of four thousand eight hundred and forty two dollars risked. The rule, the result, and the risk it was measured against, in one row.
+
+Then press A.I. reasoning, and the agent writes the technical case from its own journal entry: what it measured, and what it did about it. Every figure is quoted from the record. It is not allowed to calculate.
+
+<break time="0.7s" />
+
+[9d — Open positions. Brief, then back to the deck.]
+Five spreads are open, each showing its take profit and stop levels in dollars before either is hit. Real exposure, live — and every one cleared eight gates before it existed.
 
 <break time="1.0s" />
 
-[11 — LIVE DASHBOARD. Switch to the browser here. Four stops, in this order.
-Do not visit Volatility: slides 4 and 5 already covered implied versus realised,
-and the panel only repeats it.]
-
-[11a — Equity. Point at the market badge and the last-run time first: that is
-the proof this is running, not a recording.]
-This is the dashboard, live. The bar reads market open and the agent last ran
-minutes ago — nothing here is staged. It started at one hundred thousand
-dollars and stands at JUST OVER A HUNDRED AND TWO THOUSAND. Hover the
-curve and it reports the account at that moment against its own high-water
-mark, so a fall from a peak is the gap beneath the line.
-
-<break time="0.7s" />
-
-[11b — Decisions, Screened out tab. This is the differentiator. Let the numbers
-land before speaking.]
-Now the part I most want you to see. Before any shortlist exists, the agent
-measures the whole option chain across four underlyings — and on this cycle it
-rejected ABOUT FIFTEEN HUNDRED spreads. Every rejection is counted by the reason that stopped it, naming the
-contracts: open interest under five hundred, premium under ten cents, delta
-outside nought point one to nought point three five, measured edge below two
-dollars. Those four numbers are the strategy. It is not an agent looking for a
-reason to trade — it spends almost all of its time declining.
-
-<break time="0.7s" />
-
-[11c — Closed positions. Open one AI reasoning panel and let it type.]
-Four positions have closed, every one at a profit, two thousand and fifty-four
-dollars realised. This IWM spread was bought back at fifty-four percent of the
-premium it collected — the rule is take profit at half, and the agent acted on
-it without me. And this is it explaining itself: press AI reasoning and it
-writes the technical case from its own journal entry — what it measured, and
-what it did about it. Every figure is quoted from the record; it is not allowed
-to calculate.
-
-<break time="0.7s" />
-
-[11d — Open positions. Brief. Then back to the deck.]
-Five spreads are open against a twenty-five percent cap on capital at risk.
-Real exposure, live — and every one cleared eight risk gates before it existed.
-
-<break time="1.0s" />
-
-[12]
+[10 — DECK slide 12, the closing slide]
 I'll be straight about the limits. My quotes are indicative, not true exchange best bid and offer. Skew isn't modelled. Twenty day realised volatility is an estimator, not a forecast. Four correlated tickers isn't real diversification. The exit thresholds are unvalidated.
 
-And this is Alpaca paper trading throughout - it refuses to start against a live account. A contest week proves nothing about profitability. The research motivates the idea. It does not validate this system.
+This is Alpaca paper trading throughout — it refuses to start against a live account. And a contest week proves nothing about profitability. The research motivates the idea; it does not validate this system.
 
 Vetoed. An agent that's most useful when it says no.
 
 Thanks for watching.
-```
-
----
