@@ -423,6 +423,13 @@
   /* Rejection tally. Deliberately not .funnel - that class belongs to the
      selectivity panel, and quietly inheriting its grid is the kind of
      collision that emptied a panel once already. */
+  /* Shown only when the funnel is all zeros - see zeroCycleNote(). */
+  .fn-zero {
+    margin: 10px 16px 0; padding: 9px 12px; border-radius: 7px;
+    background: var(--raised); border-left: 2px solid var(--accent-dk);
+    font-size: 11.5px; line-height: 1.55; color: var(--text-dim);
+  }
+
   .rejbars { margin-top: 7px; display: flex; flex-direction: column; gap: 3px; }
   .rejrow { position: relative; display: flex; align-items: baseline; gap: 7px;
             padding: 2px 5px; border-radius: 3px; overflow: hidden; }
@@ -1071,7 +1078,25 @@ function funnel(runs, decisions, orders, sel) {
       <div class="fn-val">${val}</div>
       <div class="fn-bar"><div class="fn-fill ${kind}"
         style="width:${Math.max((val / max) * 100, val > 0 ? 4 : 0)}%"></div></div>
-    </div>`).join("") + selectivity(sel);
+    </div>`).join("") + zeroCycleNote(run) + selectivity(sel);
+}
+
+/* Four zeros with nothing beside them read as a broken panel, when they are
+   the most characteristic thing the agent does. This says what was measured to
+   reach that zero, and quotes the regime line the cycle itself recorded - so
+   the reader learns the market stopped paying rather than wondering whether
+   the page stopped working. Display only: every figure is already in the run
+   row, and nothing is shown unless the funnel really is empty. */
+function zeroCycleNote(run) {
+  if (Number(run.candidates || 0) > 0) return "";
+  const e = run.eliminated_json;
+  const measured = e && e.rejected
+    ? `${grp(e.rejected)} spreads measured and declined this cycle. `
+    : "";
+  const note = String(run.note || "");
+  const regime = (note.match(/REGIME:[^;]*/) || [""])[0].replace(/^REGIME:\s*/, "");
+  if (!measured && !regime) return "";
+  return `<div class="fn-zero">${measured}${regime ? esc(regime.trim()) + "." : ""}</div>`;
 }
 
 /* ------------------------------------------------------------------ */

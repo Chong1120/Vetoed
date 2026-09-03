@@ -278,6 +278,23 @@ async function checkAgentPanel(reply, expect, label) {
     }
   }
 
+  // The zero-cycle note appears only when the funnel really is empty.
+  {
+    const zero = { candidates: 0, note: "REGIME: implied/realised 0.91 <= 0.95 - premium is thin",
+                   eliminated_json: { rejected: 880, measured: 4 } };
+    const busy = { candidates: 4, note: "REGIME: premium is rich",
+                   eliminated_json: { rejected: 500 } };
+    const n = ctx.zeroCycleNote(zero);
+    if (!n || !n.includes("880") || !n.includes("premium is thin")) {
+      console.error("ZERO-CYCLE NOTE missing its figures: " + n);
+      process.exit(1);
+    }
+    if (ctx.zeroCycleNote(busy) !== "") {
+      console.error("ZERO-CYCLE NOTE shown on a cycle that had candidates");
+      process.exit(1);
+    }
+  }
+
   // No row without a candidate may survive the filter, whatever its action
   // says. The first version tested llm_action === "no_trade" and missed the
   // rows where the screener found nothing, which carry action NULL.
