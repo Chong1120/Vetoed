@@ -1946,7 +1946,7 @@ function render() {
       <td class="mono dim">${esc(shortTs(d.ts))}${closed}</td>
       <td>${spread}</td>
       <td>${edgeCell(c)}</td>
-      <td class="mono">${esc(d.llm_action || NB)}</td>
+      <td class="mono">${d.llm_action ? esc(d.llm_action) : NB}</td>
       <td class="mono">${d.llm_confidence == null ? NB : Number(d.llm_confidence).toFixed(2)}</td>
       <td>${gate}${resolved}${orderBadge(orderFor.get(d.id))}</td>
       <td class="rationale">${esc(d.llm_rationale)}

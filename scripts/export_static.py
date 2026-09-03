@@ -49,8 +49,13 @@ def build() -> dict:
         "broker_positions": payload.broker_positions(),
         "selectivity": payload.selectivity(),
         "closed_positions": payload.closed_positions(),
-        "decisions": payload.decisions(60),
-        "runs": payload.runs(30),
+        # Enough to cover every decision that produced a trade. At 60 the
+        # decision log was truncated well inside the order history, so eight
+        # of twelve filled orders had no decision row in the payload and the
+        # TRADED tab could only ever show four of them - the page was not
+        # wrong, it simply had not been given the rows.
+        "decisions": payload.decisions(400),
+        "runs": payload.runs(150),
         "orders": payload.orders(200),
     }
 
