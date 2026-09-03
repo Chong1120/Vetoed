@@ -172,3 +172,34 @@ def test_an_uncertain_order_can_be_resolved_without_a_broker_id():
     row = [o for o in journal.all_orders(50, path=db) if o["id"] == rid][0]
     assert row["status"] == "not_filled", (
         "an uncertain row with no broker id was not resolved: %r" % row["status"])
+
+
+def test_an_adopted_row_can_be_closed_without_a_broker_id():
+    """An adopted row never has an alpaca_order_id, so it must close by row id.
+
+    Adopted rows are rebuilt from the broker's own position data, not from an
+    order we sent. close_order matched only on alpaca_order_id, so a QQQ spread
+    the broker had stopped holding stayed open in the journal for two days
+    while every cycle logged "no longer held at the broker - marking closed"
+    and closed nothing.
+    """
+    import os
+    import tempfile
+    from agent import journal
+
+    db = os.path.join(tempfile.mkdtemp(), "t.db")
+    journal.init(db)
+    journal.adopt_order(underlying="QQQ", kind="call_credit",
+                        short_symbol="QQQ260904C00714000",
+                        long_symbol="QQQ260904C00719000",
+                        contracts=14, credit=1.39, max_loss_total=5054.0,
+                        path=db)
+    row = [o for o in journal.all_orders(50, path=db)
+           if o["short_symbol"] == "QQQ260904C00714000"][0]
+    assert not row["alpaca_order_id"], "an adopted row should carry no broker id"
+
+    journal.close_order(None, 0.0, reason="no longer held at the broker",
+                        row_id=row["id"], path=db)
+    after = [o for o in journal.all_orders(50, path=db) if o["id"] == row["id"]][0]
+    assert after["closed_ts"], "adopted row was not closed"
+    assert after["exit_reason"] == "no longer held at the broker"

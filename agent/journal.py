@@ -316,19 +316,32 @@ def adopt_order(underlying: str, kind: str, short_symbol: str,
         return int(cur.lastrowid)
 
 
-def close_order(alpaca_order_id: str, realised_pnl: float,
-                reason: str = "", path: str = DB_PATH) -> None:
+def close_order(alpaca_order_id: str | None, realised_pnl: float,
+                reason: str = "", row_id: int | None = None,
+                path: str = DB_PATH) -> None:
     """Record a close, and WHY.
 
     The reason was computed at the exit and then dropped, so the journal knew
     a position had closed for $484 and not whether that was a target hit or a
     stop taken - which is the more interesting half. Existing rows keep a NULL
     here; nothing invents a reason after the fact.
+
+    Matched by broker id where there is one, row id otherwise - the same fault
+    as update_order_status had, and for the same reason. An ADOPTED row is
+    rebuilt from the broker's position data, not from an order we sent, so it
+    never has an alpaca_order_id. A QQQ spread the broker had stopped holding
+    sat open in the journal for two days while every cycle logged "no longer
+    held at the broker - marking closed" and closed nothing.
     """
     with connect(path) as c:
-        c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=? "
-                  "WHERE alpaca_order_id=?",
-                  (now(), realised_pnl, reason or None, alpaca_order_id))
+        if alpaca_order_id:
+            c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=? "
+                      "WHERE alpaca_order_id=?",
+                      (now(), realised_pnl, reason or None, alpaca_order_id))
+        elif row_id is not None:
+            c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=? "
+                      "WHERE id=?",
+                      (now(), realised_pnl, reason or None, int(row_id)))
 
 
 def snapshot_equity(equity: float, last_equity: float, cash: float,

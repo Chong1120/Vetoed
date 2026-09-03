@@ -254,9 +254,9 @@ def reconcile(state: BrokerState, rows: list[dict] | None = None,
         # Filled once, now gone: expired, assigned, or closed elsewhere.
         r.corrections.append("%s: no longer held at the broker - marking closed"
                              % (short_sym or "?"))
-        if oid:
-            journal.close_order(oid, float(row.get("realised_pnl") or 0.0),
-                                **({"path": path} if path else {}))
+        journal.close_order(oid, float(row.get("realised_pnl") or 0.0),
+                            row_id=row.get("id"),
+                            **({"path": path} if path else {}))
 
     # Legs the broker holds that no open journal row explains.
     accounted = set()
