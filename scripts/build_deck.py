@@ -355,7 +355,7 @@ def build() -> str:
          "After \u2014 one corrected model", "+$0.34",
          "below the $2.00 gate \u2014 so it is not taken", PROFIT, 24)
     card(s, x, Inches(5.52), Inches(4.5), Inches(1.0), "Regression tests",
-         "77 \u2192 207", "", ACCENT, 22)
+         "77 \u2192 236", "", ACCENT, 22)
     chrome(s, n, N)
 
     # 7 - separation of powers --------------------------------------------- #
@@ -404,7 +404,7 @@ def build() -> str:
              ("25", TEXT, "contracts, hard cap\nwhatever the maths says"),
              ("0", PROFIT, "naked positions,\nstructurally impossible"),
              ("2", TEXT, "legs, one atomic order \u2014\nboth fill or neither"),
-             ("207", ACCENT, "tests, most of them\non the gates")]
+             ("236", ACCENT, "tests, most of them\non the gates")]
     for i, (n_, col, lab) in enumerate(facts):
         cx = M + (i % 3) * Inches(3.95)
         cy = Inches(2.95) + (i // 3) * Inches(1.75)
@@ -507,7 +507,7 @@ def build() -> str:
          "Equity curve \u00b7 screening funnel \u00b7 implied vs realised \u00b7 "
          "every decision \u00b7 every veto", size=11.5, color=MUTED, spacing=1.3)
     x = M + Inches(7.2)
-    stats = [("207", PROFIT, "tests passing"), ("0", TEXT, "LLM write paths"),
+    stats = [("236", PROFIT, "tests passing"), ("0", TEXT, "LLM write paths"),
              ("8", TEXT, "risk gates"), ("100%", ACCENT, "decisions journalled")]
     for i, (v, col, lab) in enumerate(stats):
         cx = x + (i % 2) * Inches(2.3)

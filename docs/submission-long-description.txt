@@ -1,0 +1,13 @@
+Most trading agents hand a language model the keys. Vetoed inverts that: the LLM is its least-trusted part.
+
+It sells defined-risk credit spreads on SPY, QQQ, IWM and AAPL. Every position is two legs sent as one order, so the maximum loss is known before the order exists and a naked short is impossible.
+
+Separation of powers is the design. A deterministic screener prices each candidate twice through one lognormal model, changing only the volatility input - implied versus 20-day realised. That difference is our own model-derived edge measure, motivated by volatility risk premium research; it is deliberately not the academic variance risk premium, which is defined and measured differently. A typical cycle measures ~1,500 spreads and rejects nearly all of them - the dashboard shows every rejection by its reason, naming contracts. The LLM then picks one entry from what survives and nothing else: its contracts are validated against the shortlist so an invented one is unexecutable, its size is discarded, and a deterministic risk module can overrule it at any confidence.
+
+Eight hard gates apply, including 5% of equity per position, 25% across all, a 3% daily-loss halt and a 25-contract cap. It adapts from its own journal but only toward restriction - three straight losses ban an underlying - and never on fewer than five closed trades.
+
+Auditing my own maths, I found the edge metric was mostly artifact: one side used delta as a probability, and the payoff between strikes was approximated at its midpoint. Both changed real trade decisions. Fixed; the suite grew from 77 to 236 tests.
+
+A scheduled trigger starts one unattended session a day on GitHub Actions. Every pass reconciles against the broker, manages exits and scores the board, roughly every ten minutes; only every third may open a position. Deterministic order IDs mean a restart cannot duplicate a position.
+
+Paper trading only - it refuses to start against live money. A contest week proves nothing about profitability.
