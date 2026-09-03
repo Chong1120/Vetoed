@@ -580,12 +580,27 @@ def _decide_anthropic(shortlist, prompt, api_key):
 
 
 def _parse_and_validate(text: str, shortlist: list[dict]) -> BrainDecision:
-    """Shared tail: parse whatever the model said, then verify it."""
+    """Shared tail: parse whatever the model said, then verify it.
+
+    Unparseable output falls back to the deterministic selector, exactly as a
+    network failure does. `decide` promises to "fall back whenever the
+    judgement layer is unavailable", and a model returning something that is
+    not JSON IS unavailable - it just fails in a different place. This path
+    returned no_trade instead, so on 2026-09-03 two cycles skipped entirely
+    with "could not parse model output" while the screener had a perfectly
+    good shortlist sitting there. A provider that errors trades; a provider
+    that babbles did not, which is backwards.
+
+    The raw text and the parse error are still journalled, so a cycle that
+    fell back is never mistaken for one the model answered.
+    """
     try:
         payload = extract_json(text)
     except Exception as exc:
-        return no_trade("could not parse model output", raw=text[:4000],
-                        error="%s: %s" % (type(exc).__name__, exc))
+        d = deterministic_decide(shortlist, "model output was not valid JSON")
+        d.raw = text[:4000]
+        d.error = "%s: %s" % (type(exc).__name__, exc)
+        return d
     decision = validate(payload, shortlist)
     decision.raw = text[:4000]
     return decision

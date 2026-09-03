@@ -203,3 +203,31 @@ def test_an_adopted_row_can_be_closed_without_a_broker_id():
     after = [o for o in journal.all_orders(50, path=db) if o["id"] == row["id"]][0]
     assert after["closed_ts"], "adopted row was not closed"
     assert after["exit_reason"] == "no longer held at the broker"
+
+
+def _one_candidate():
+    return [{"underlying": "SPY", "kind": "put_credit", "expiry": "2026-09-11",
+             "dte": 8, "short_symbol": "SPY260911P00755000",
+             "long_symbol": "SPY260911P00750000", "short_strike": 755.0,
+             "long_strike": 750.0, "width": 5.0, "credit": 0.60,
+             "max_loss": 440.0, "max_profit": 60.0, "vrp_edge": 12.0, "ev": 18.0,
+             "pop": 0.83, "short_delta": -0.20, "min_open_interest": 900,
+             "worst_spread_pct": 0.03, "score": 0.4}]
+
+
+def test_unparseable_model_output_falls_back_instead_of_skipping():
+    """A model that babbles must fall back, exactly as one that errors does.
+
+    decide() promises to fall back "whenever the judgement layer is
+    unavailable". A provider outage did fall back and traded; output that was
+    not valid JSON returned no_trade, so two cycles on 2026-09-03 skipped
+    entirely with a perfectly good shortlist in hand. Same failure, opposite
+    behaviour.
+    """
+    from agent import brain
+
+    d = brain._parse_and_validate("{\n 'not': json,\n}", _one_candidate())
+    assert d.action == "open_spread", (
+        "unparseable output gave %r instead of falling back" % d.action)
+    assert d.error, "the parse error must still be journalled"
+    assert d.raw, "the raw model output must still be journalled"
