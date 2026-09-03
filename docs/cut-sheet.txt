@@ -1,85 +1,124 @@
-VETOED - CUT SHEET   8:03  ->  4:36
-Keep 1, 4, 6, 7, 9b, 9c, 12    Delete 2, 3, 5, 8, 9a, 9d
-==============================================================================
+VETOED - CUT SHEET   admin brief: what you built / how it works / how it uses Alpaca
 
-KEEP    [1]  Deck 1 - hook + thesis   (22s)
-------------------------------------------------------------------------------
-   Most A.I. trading agents give a language model the keys, and hope it behaves. This one does the opposite.
-   It's called Vetoed. It trades options on Alpaca paper, and the A.I. is the least trusted component in it. On the cycle you are about to see, it measured fifteen hundred spreads and refused all but a handful.
+CUT ENTIRELY:  section 2 (the problem)   6 (caught it lying)   9a (KPI row)
+Everything below is already in your audio - you are only DELETING sentences.
+==============================================================================================
 
-DELETE  [2]  Deck 2 - the problem   (26s)
-------------------------------------------------------------------------------
-   The problem is authority. If a model can pick the trade, decide the size, and send the order, then one hallucinated contract is a real loss. And you cannot unit test a language model.
-   But you can unit test the code that decides whether to obey it.
-   So the model's entire authority is this: pick one item from a list it did not write.
+>>> 0:00   DECK 1 - what it is   (22s)
+----------------------------------------------------------------------------------------------
+   KEEP  Most A.I.
+   KEEP  trading agents give a language model the keys, and hope it behaves.
+   KEEP  This one does the opposite.
+   KEEP  It's called Vetoed.
+   KEEP  It trades options on Alpaca paper, and the A.I.
+   KEEP  is the least trusted component in it.
+   KEEP  On the cycle you are about to see, it measured fifteen hundred spreads and refused all but a handful.
 
-DELETE  [3]  Deck 3 - credit spreads   (21s)
-------------------------------------------------------------------------------
-   The strategy is selling defined risk credit spreads. Two contracts, always together. We sell one option and buy a cheaper one further out, collect the difference as premium, and the one we bought caps the loss.
-   The second leg is the important part. The worst case is known before the order is ever sent.
+>>> 0:22   DECK 3 - credit spreads   (16s)
+----------------------------------------------------------------------------------------------
+   KEEP  The strategy is selling defined risk credit spreads.
+   CUT   Two contracts, always together.
+   KEEP  We sell one option and buy a cheaper one further out, collect the difference as premium, and the one we bought caps the loss.
+   CUT   The second leg is the important part.
+   KEEP  The worst case is known before the order is ever sent.
 
-KEEP    [4]  Deck 4 - implied vs realised   (29s)
-------------------------------------------------------------------------------
-   Now, why volatility. Implied volatility is how much movement option prices are charging for. Realised volatility is how much the stock has actually been moving.
-   On this screen, Apple's options were pricing about twenty four percent while the stock had been moving about nineteen. A ratio of one point two six — priced for more movement than has been happening.
-   That gap is what a premium seller is trying to collect.
+>>> 0:38   DECK 4 - the gap it hunts   (12s)
+----------------------------------------------------------------------------------------------
+   CUT   Now, why volatility.
+   KEEP  Implied volatility is how much movement option prices are charging for.
+   KEEP  Realised volatility is how much the stock has actually been moving.
+   CUT   On this screen, Apple's options were pricing about twenty four percent while the stock had been moving about nineteen.
+   CUT   A ratio of one point two six — priced for more movement than has been happening.
+   KEEP  That gap is what a premium seller is trying to collect.
 
-DELETE  [5]  Deck 5 - the measurement   (38s)
-------------------------------------------------------------------------------
-   So Vetoed measures that gap directly. It takes one spread and prices it twice, through the same model, with the same payoff. The only thing that changes is which volatility goes in.
-   At realised volatility that spread was worth about twenty eight dollars. At the market's implied volatility, minus fourteen. The difference, about forty two dollars, is the signal.
-   I want to be precise about what that is. It's our own model derived measure, motivated by volatility risk premium research. It is not the academic variance risk premium, which is a different thing measured a different way.
+>>> 0:50   DECK 5 - how it measures the gap   (29s)
+----------------------------------------------------------------------------------------------
+   KEEP  So Vetoed measures that gap directly.
+   KEEP  It takes one spread and prices it twice, through the same model, with the same payoff.
+   KEEP  The only thing that changes is which volatility goes in.
+   KEEP  At realised volatility that spread was worth about twenty eight dollars.
+   KEEP  At the market's implied volatility, minus fourteen.
+   KEEP  The difference, about forty two dollars, is the signal.
+   CUT   I want to be precise about what that is.
+   CUT   It's our own model derived measure, motivated by volatility risk premium research.
+   KEEP  It is not the academic variance risk premium, which is a different thing measured a different way.
 
-KEEP    [6]  Deck 6 - THE BUG   (50s)
-------------------------------------------------------------------------------
-   And here's the part I'm actually proud of. I caught my own agent lying.
-   There was an I.W.M. trade where implied and realised volatility were almost identical, so there was essentially no gap to collect. The agent reported a healthy edge anyway.
-   Two defects. One side of the calculation used delta as if it were a probability, and it isn't quite. And the payoff between the two strikes was approximated at its midpoint, which a lognormal distribution does not respect.
-   Both changed real trade decisions, not just displayed numbers. On that trade the honest figure is thirty four cents, which is below the gate, so the agent doesn't take it.
-   I found them, fixed them, and the test suite went from seventy seven to two hundred and thirty six.
+>>> 1:19   DECK 7 - the workflow + Alpaca MCP   (31s)
+----------------------------------------------------------------------------------------------
+   KEEP  The architecture is separation of powers.
+   KEEP  A deterministic screener decides what is structurally valid.
+   KEEP  The model decides what looks attractive.
+   KEEP  A deterministic risk module decides what is allowed, and can overrule the model at any confidence.
+   KEEP  Its contracts are checked against the shortlist, so an invented one is unexecutable.
+   CUT   It returns a size, and we throw that away.
+   KEEP  Everything that reaches the broker goes through Alpaca's own M.C.P.
+   KEEP  server — the single write path in the system.
+   KEEP  Every order carries a deterministic identifier, so a restart cannot open the same spread twice.
 
-KEEP    [7]  Deck 7 - separation + MCP   (37s)
-------------------------------------------------------------------------------
-   The architecture is separation of powers. A deterministic screener decides what is structurally valid. The model decides what looks attractive. A deterministic risk module decides what is allowed, and can overrule the model at any confidence.
-   Its contracts are checked against the shortlist, so an invented one is unexecutable. It returns a size, and we throw that away.
-   Everything that reaches the broker goes through Alpaca's own M.C.P. server — the single write path in the system. Every order carries a deterministic identifier, so a restart cannot open the same spread twice.
+>>> 1:50   DECK 8 - risk gates   (22s)
+----------------------------------------------------------------------------------------------
+   KEEP  Eight hard gates, and any single one rejects the trade outright.
+   KEEP  Five percent of equity in any one position, twenty five percent across all of them, a three percent daily loss halts the session, and a hard cap of twenty five contracts whatever the maths says.
+   CUT   It learns from its own journal, but only toward restriction — three losses in a row bans an underlying — and never on fewer than five closed trades.
+   KEEP  It can learn, but it cannot learn its way around the risk controls.
 
-DELETE  [8]  Deck 8/10 - risk gates   (34s)
-------------------------------------------------------------------------------
-   Eight hard gates, and any single one rejects the trade outright. Five percent of equity in any one position, twenty five percent across all of them, a three percent daily loss halts the session, and a hard cap of twenty five contracts whatever the maths says.
-   It learns from its own journal, but only toward restriction — three losses in a row bans an underlying — and never on fewer than five closed trades. It can learn, but it cannot learn its way around the risk controls.
+>>> 2:12   WEBSITE - screened out   (53s)
+----------------------------------------------------------------------------------------------
+   KEEP  Now the part I most want you to see.
+   KEEP  Before a shortlist even exists, the agent measures the whole chain across four underlyings.
+   KEEP  On this cycle it measured seventy spreads in full and rejected one thousand five hundred and three.
+   KEEP  Eight reasons, and you can open the breakdown.
+   KEEP  Nine hundred and nineteen for open interest below the liquidity floor — and it names them: S.P.Y.
+   KEEP  six ninety call, open interest two, floor five hundred.
+   KEEP  Four hundred and five for premium under ten cents.
+   KEEP  Fifty seven for delta outside the target band.
+   KEEP  And at the bottom, the six it measured in full and still declined.
+   KEEP  A Q.Q.Q.
+   KEEP  spread with a measured edge of one dollar seventy four, against two dollars required.
+   KEEP  It missed by twenty six cents, and the agent said no.
+   KEEP  This is not an agent looking for a reason to trade.
 
-DELETE  [9a]  BROWSER - KPI row   (40s)
-------------------------------------------------------------------------------
-   This is it running, live, with the market open. And every number explains itself.
-   Equity, a hundred and one thousand seven hundred and ninety three dollars — labelled "cash, plus what the positions are worth now". Capital at risk, twenty one thousand six hundred and sixty five: twenty one point three percent of equity, with "cap twenty five percent" printed beside it. Five positions, "limit five concurrent". Nobody has to be told what any of this means.
-   Of the profit, two thousand and fifty four is realised and banked. Two hundred and twenty six is still open, and could still move.
+>>> 3:05   WEBSITE - closed position + AI reasoning   (48s)
+----------------------------------------------------------------------------------------------
+   KEEP  Four closed, four profitable, two thousand and fifty four dollars realised.
+   KEEP  Look at how one reports itself.
+   KEEP  I.W.M., sold the two ninety five call, bought the three hundred, twelve contracts.
+   KEEP  Collected eleven hundred and fifty eight, kept fifty four percent of that premium, which was twelve point nine percent of the four thousand eight hundred and forty two it had at risk.
+   KEEP  Take profit, six hundred and twenty four of eleven fifty eight maximum.
+   KEEP  And press A.I.
+   KEEP  reasoning: the agent writes the case from its own journal.
+   KEEP  Expected value at realised volatility, twenty four dollars thirty nine.
+   KEEP  The market pricing it at six sixty one.
+   KEEP  An edge of seventeen dollars seventy seven per spread.
+   KEEP  Every figure quoted from the record — it is not allowed to calculate.
 
-KEEP    [9b]  BROWSER - SCREENED OUT   (55s)
-------------------------------------------------------------------------------
-   Now the part I most want you to see. Before a shortlist even exists, the agent measures the whole chain across four underlyings. On this cycle it measured seventy spreads in full and rejected one thousand five hundred and three.
-   Eight reasons, and you can open the breakdown. Nine hundred and nineteen for open interest below the liquidity floor — and it names them: S.P.Y. six ninety call, open interest two, floor five hundred. Four hundred and five for premium under ten cents. Fifty seven for delta outside the target band.
-   And at the bottom, the six it measured in full and still declined. A Q.Q.Q. spread with a measured edge of one dollar seventy four, against two dollars required. It missed by twenty six cents, and the agent said no.
-   This is not an agent looking for a reason to trade.
+>>> 3:53   WEBSITE - open position + defined risk   (39s)
+----------------------------------------------------------------------------------------------
+   KEEP  And one still live.
+   KEEP  Q.Q.Q., sold the seven fourteen call, bought the seven nineteen, fourteen contracts.
+   KEEP  It collected nineteen hundred and forty six dollars, and the most it can lose is five thousand and fifty four.
+   KEEP  Add those and you get exactly seven thousand — five dollars of width, times a hundred, times fourteen contracts.
+   KEEP  That is what defined risk means, and you can check it on the screen.
+   KEEP  Take profit sits at nine hundred and seventy three, half the credit.
+   KEEP  The stop at minus three thousand eight hundred and ninety two, twice it.
+   KEEP  Both decided before the order existed.
+   CUT   It says "wins if it stays below seven fourteen", and Q.Q.Q.
+   CUT   is five dollars and forty three cents below that right now.
 
-KEEP    [9c]  BROWSER - closed IWM + AI   (49s)
-------------------------------------------------------------------------------
-   Four closed, four profitable, two thousand and fifty four dollars realised.
-   Look at how one reports itself. I.W.M., sold the two ninety five call, bought the three hundred, twelve contracts. Collected eleven hundred and fifty eight, kept fifty four percent of that premium, which was twelve point nine percent of the four thousand eight hundred and forty two it had at risk. Take profit, six hundred and twenty four of eleven fifty eight maximum.
-   And press A.I. reasoning: the agent writes the case from its own journal. Expected value at realised volatility, twenty four dollars thirty nine. The market pricing it at six sixty one. An edge of seventeen dollars seventy seven per spread. Every figure quoted from the record — it is not allowed to calculate.
+>>> 4:32   DECK 12 - close   (19s)
+----------------------------------------------------------------------------------------------
+   KEEP  I'll be straight about the limits.
+   CUT   My quotes are indicative, not true exchange best bid and offer.
+   CUT   Skew isn't modelled.
+   KEEP  Twenty day realised volatility is an estimator, not a forecast.
+   CUT   Four correlated tickers isn't real diversification.
+   CUT   The exit thresholds are unvalidated.
+   KEEP  This is Alpaca paper trading throughout — it refuses to start against a live account.
+   KEEP  And a contest week proves nothing about profitability.
+   CUT   The research motivates the idea; it does not validate this system.
+   CUT   Vetoed.
+   KEEP  An agent that's most useful when it says no.
+   KEEP  Thanks for watching.
 
-DELETE  [9d]  BROWSER - open QQQ   (48s)
-------------------------------------------------------------------------------
-   And one still live. Q.Q.Q., sold the seven fourteen call, bought the seven nineteen, fourteen contracts. It collected nineteen hundred and forty six dollars, and the most it can lose is five thousand and fifty four.
-   Add those and you get exactly seven thousand — five dollars of width, times a hundred, times fourteen contracts. That is what defined risk means, and you can check it on the screen. Take profit sits at nine hundred and seventy three, half the credit. The stop at minus three thousand eight hundred and ninety two, twice it. Both decided before the order existed.
-   It says "wins if it stays below seven fourteen", and Q.Q.Q. is five dollars and forty three cents below that right now.
-
-KEEP    [12]  Deck 12 - limits + close   (34s)
-------------------------------------------------------------------------------
-   I'll be straight about the limits. My quotes are indicative, not true exchange best bid and offer. Skew isn't modelled. Twenty day realised volatility is an estimator, not a forecast. Four correlated tickers isn't real diversification. The exit thresholds are unvalidated.
-   This is Alpaca paper trading throughout — it refuses to start against a live account. And a contest week proves nothing about profitability. The research motivates the idea; it does not validate this system.
-   Vetoed. An agent that's most useful when it says no.
-   Thanks for watching.
-
-==============================================================================
-KEPT TOTAL: 4:36
+==============================================================================================
+TOTAL  4:51
