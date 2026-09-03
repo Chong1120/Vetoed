@@ -241,15 +241,33 @@ def record_order(decision_id: int, candidate: dict, contracts: int,
         return int(cur.lastrowid)
 
 
-def update_order_status(alpaca_order_id: str, status: str,
+def update_order_status(alpaca_order_id: str | None, status: str,
                         filled_qty: float | None = None,
                         fill_price: float | None = None,
+                        row_id: int | None = None,
                         path: str = DB_PATH) -> None:
+    """Set a status, matched by broker id where there is one, row id otherwise.
+
+    Matching only on alpaca_order_id silently skipped the rows that needed it
+    most. An order journalled "uncertain" has no broker id BY DEFINITION -
+    uncertain means the submission never came back with one - so reconcile
+    would decide the order never arrived, log "marking not-filled", and update
+    nothing. The row sat at uncertain for ever and the dashboard showed it as
+    an UNCONFIRMED position that the broker had never heard of.
+
+    The row id is the journal's own primary key, so it always exists.
+    """
     with connect(path) as c:
-        c.execute(
-            "UPDATE orders SET status=?, filled_qty=COALESCE(?, filled_qty),"
-            " fill_price=COALESCE(?, fill_price) WHERE alpaca_order_id=?",
-            (status, filled_qty, fill_price, alpaca_order_id))
+        if alpaca_order_id:
+            c.execute(
+                "UPDATE orders SET status=?, filled_qty=COALESCE(?, filled_qty),"
+                " fill_price=COALESCE(?, fill_price) WHERE alpaca_order_id=?",
+                (status, filled_qty, fill_price, alpaca_order_id))
+        elif row_id is not None:
+            c.execute(
+                "UPDATE orders SET status=?, filled_qty=COALESCE(?, filled_qty),"
+                " fill_price=COALESCE(?, fill_price) WHERE id=?",
+                (status, filled_qty, fill_price, int(row_id)))
 
 
 def set_decision_outcome(decision_id: int, outcome: str,

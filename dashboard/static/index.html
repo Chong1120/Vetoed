@@ -787,9 +787,27 @@ function pickSeries(live, journalSeries) {
   const s = live && live.equity_series;
   if (!Array.isArray(s) || s.length < 2) return journalSeries;
   const now = live && live.equity != null ? Number(live.equity) : null;
+
+  // Check 1: the end of the curve must agree with the account balance.
   if (now && now > 0) {
     const last = Number(s[s.length - 1].equity);
     if (!isFinite(last) || Math.abs(last - now) / now > 0.02) return journalSeries;
+  }
+
+  // Check 2: no single step may be larger than the account could actually
+  // move. Checking only the endpoint was not enough - Alpaca returned a
+  // history whose first eighty points were the base value ADDED to the equity,
+  // $200,000, and then dropped to $100,000. The last point agreed with the
+  // account, so check 1 passed, and the page drew a 50% cliff that never
+  // happened: "worst fall from a peak -50.86%, return -49.95%".
+  //
+  // Total risk is capped at 25% of equity and every position is defined-risk,
+  // so a 30% move inside one fifteen-minute bar is not something this account
+  // can do. A step that large means the series is not measuring one thing.
+  for (let i = 1; i < s.length; i++) {
+    const a = Number(s[i - 1].equity), b = Number(s[i].equity);
+    if (!isFinite(a) || !isFinite(b) || a <= 0) return journalSeries;
+    if (Math.abs(b - a) / a > 0.30) return journalSeries;
   }
   return s;
 }

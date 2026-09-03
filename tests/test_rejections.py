@@ -139,3 +139,36 @@ def test_a_five_cent_spread_is_never_refused_by_binary_rounding():
         assert _spread_ok(r), (
             "%.2f/%.2f is a five-cent spread and must pass (raw %r)"
             % (bid, ask, r.spread))
+
+
+def test_an_uncertain_order_can_be_resolved_without_a_broker_id():
+    """The rows that need resolving are exactly the ones with no broker id.
+
+    "uncertain" means the submission never came back with an alpaca_order_id.
+    update_order_status matched only on that column, so reconcile would find
+    the broker holding nothing, log "marking not-filled", and change nothing -
+    leaving an UNCONFIRMED position on the dashboard for a spread that was
+    never placed.
+    """
+    import os
+    import tempfile
+    from agent import journal
+
+    db = os.path.join(tempfile.mkdtemp(), "t.db")
+    journal.init(db)
+    candidate = {"underlying": "AAPL", "kind": "put_credit",
+                 "short_symbol": "AAPL260911P00320000",
+                 "long_symbol": "AAPL260911P00315000",
+                 "credit": 1.07, "short_delta": -0.25, "dte": 8}
+    # A submission that never came back with a broker id - status uncertain,
+    # result carries no "id".
+    rid = journal.record_order(
+        decision_id=None, candidate=candidate, contracts=12,
+        limit_price=1.07, max_loss_total=4848.0,
+        result={"status": "uncertain", "client_order_id": "vetoed-test-noid"},
+        path=db)
+
+    journal.update_order_status(None, "not_filled", row_id=rid, path=db)
+    row = [o for o in journal.all_orders(50, path=db) if o["id"] == rid][0]
+    assert row["status"] == "not_filled", (
+        "an uncertain row with no broker id was not resolved: %r" % row["status"])

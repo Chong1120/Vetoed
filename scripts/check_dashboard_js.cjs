@@ -256,6 +256,19 @@ async function checkAgentPanel(reply, expect, label) {
       console.error("PAGE ACCEPTED an equity curve that contradicts the account");
       process.exit(1);
     }
+    // The real failure of 3 September: a doubled PREFIX, correct tail. The
+    // endpoint agreed with the account so the old check waved it through, and
+    // the chart reported a 50% crash that never happened.
+    const halfBad = journal.map((r, i) => ({
+      t: Math.floor(Date.parse(r.ts) / 1000),
+      equity: i < journal.length / 3 ? r.equity + 100000 : r.equity,
+    }));
+    const tail = journal[journal.length - 1].equity;
+    if (ctx.pickSeries({ equity: tail, equity_series: halfBad }, journal) !== journal) {
+      console.error("PAGE ACCEPTED a curve with a 50% step in it");
+      process.exit(1);
+    }
+
     const good = journal.map(r => ({ t: Math.floor(Date.parse(r.ts) / 1000),
                                      equity: r.equity }));
     const okv = journal[journal.length - 1].equity;

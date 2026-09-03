@@ -217,8 +217,9 @@ def reconcile(state: BrokerState, rows: list[dict] | None = None,
             # never corrected, so the dashboard showed "pending_new" beside
             # positions that had been open for hours. The broker is the
             # authority on this, and it has just answered.
-            if oid and status not in ("filled", "closed"):
+            if status not in ("filled", "closed"):
                 journal.update_order_status(oid, "filled",
+                                            row_id=row.get("id"),
                                             **({"path": path} if path else {}))
                 r.corrections.append("%s: confirmed filled at the broker"
                                      % (short_sym or "?"))
@@ -237,9 +238,9 @@ def reconcile(state: BrokerState, rows: list[dict] | None = None,
             r.corrections.append(
                 "%s: status %r and broker shows nothing - marking not-filled"
                 % (short_sym or "?", status or "none"))
-            if oid:
-                journal.update_order_status(oid, "not_filled",
-                                            **({"path": path} if path else {}))
+            journal.update_order_status(oid, "not_filled",
+                                        row_id=row.get("id"),
+                                        **({"path": path} if path else {}))
             continue
 
         if has_short != has_long:
