@@ -494,8 +494,9 @@ def build() -> str:
     eyebrow(s, "Running, unattended")
     heading(s, "It trades on a schedule,\nwith nothing of mine switched on.")
     body(s, M, Inches(2.95), Inches(6.6), [
-        [("A GitHub Actions schedule runs one full cycle roughly every 30 "
-          "minutes during the US session. ", {}),
+        [("A scheduled trigger starts one session a day on GitHub Actions; "
+          "inside it the agent re-screens every 10 minutes and may open a "
+          "position every 30. ", {}),
          ("No server, no laptop.", {"bold": True, "color": TEXT})],
         "Every cycle reconciles against Alpaca before it does anything, so a "
         "restart can't duplicate a position \u2014 and every order carries an id "
