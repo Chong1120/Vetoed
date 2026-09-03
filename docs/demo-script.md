@@ -17,7 +17,7 @@ is in §2.
 [1 — DECK slide 1]
 Most A.I. trading agents give a language model the keys, and hope it behaves. This one does the opposite.
 
-It's called Vetoed. It trades options on Alpaca paper, and the A.I. is the least trusted component in it. On a normal cycle it measures about fifteen hundred spreads and refuses almost every one of them.
+It's called Vetoed. It trades options on Alpaca paper, and the A.I. is the least trusted component in it. On the cycle you are about to see, it measured fifteen hundred spreads and refused all but a handful.
 
 <break time="0.8s" />
 
@@ -84,40 +84,47 @@ It learns from its own journal, but only toward restriction — three losses in 
 
 <break time="1.0s" />
 
-[9 — LIVE DASHBOARD. Switch to the browser here. Deck slides 9 and 11 are
-NOT used: slide 9 is what the demo shows better, and slide 11 is a static
-summary of the thing you are about to show running. Skip Volatility in the
-dashboard too - slides 4 and 5 already covered implied versus realised.]
+[9 — LIVE DASHBOARD, recorded 2 September at 19:03 UTC with the market open.
+Switch to the browser here. Deck slides 9 and 11 are NOT used: 9 is what the
+demo shows better, 11 is a static summary of the thing you are showing running.
+Skip the Volatility panel too - slides 4 and 5 already covered it.]
 
-[9a — Top of page: the KPI row, then the equity curve.]
-This is it running, live. And the thing I want you to notice is that every number explains itself.
+[9a — Top of the page: the KPI row, then the equity curve.]
+This is it running, live, with the market open. And every number explains itself.
 
-Equity isn't just a figure — it says "cash, plus what the positions are worth now". Capital at risk reads twenty one point four percent of equity, with "cap twenty five percent" printed beside it. Premium collected says "received up front", because it is not earned until the spread is closed. Open positions says "limit five concurrent". Nobody has to be told what any of these mean.
+Equity, a hundred and one thousand seven hundred and ninety three dollars — labelled "cash, plus what the positions are worth now". Capital at risk, twenty one thousand six hundred and sixty five: twenty one point three percent of equity, with "cap twenty five percent" printed beside it. Five positions, "limit five concurrent". Nobody has to be told what any of this means.
 
-The curve carries a high-water mark, so a fall from a peak is the gap beneath the line.
-
-<break time="0.7s" />
-
-[9b — Decisions, Screened out tab. THE differentiator. Expand one breakdown and let it sit on screen.]
-Now the part I most want you to see. Before a shortlist even exists, the agent measures the whole option chain across four underlyings — and on this cycle it rejected about fifteen hundred spreads.
-
-Eight reasons, and you can open the breakdown. Every rejection is counted by the reason that stopped it, naming real contracts: open interest under five hundred, premium under ten cents, delta outside nought point one to nought point three five, measured edge below two dollars.
-
-Those four numbers are the strategy. This is not an agent looking for a reason to trade. It spends almost all of its time declining.
+Of the profit, two thousand and fifty four is realised and banked. Two hundred and twenty six is still open, and could still move.
 
 <break time="0.7s" />
 
-[9c — Closed positions. Press one AI reasoning panel and let it type.]
+[9b — Decisions, Screened out tab. THE differentiator. Expand the breakdown,
+then open the near-miss list at the bottom.]
+Now the part I most want you to see. Before a shortlist even exists, the agent measures the whole chain across four underlyings. On this cycle it measured seventy spreads in full and rejected one thousand five hundred and three.
+
+Eight reasons, and you can open the breakdown. Nine hundred and nineteen for open interest below the liquidity floor — and it names them: S.P.Y. six ninety call, open interest two, floor five hundred. Four hundred and five for premium under ten cents. Fifty seven for delta outside the target band.
+
+And at the bottom, the six it measured in full and still declined. A Q.Q.Q. spread with a measured edge of one dollar seventy four, against two dollars required. It missed by twenty six cents, and the agent said no.
+
+This is not an agent looking for a reason to trade.
+
+<break time="0.7s" />
+
+[9c — Closed positions. The IWM row, AI reasoning panel already open.]
 Four closed, four profitable, two thousand and fifty four dollars realised.
 
-And look at how a closed trade reports itself. Take profit, plus six hundred and twenty four of eleven hundred and fifty eight maximum. Kept fifty four percent of premium. Twelve point nine percent of four thousand eight hundred and forty two dollars risked. The rule, the result, and the risk it was measured against, in one row.
+Look at how one reports itself. I.W.M., sold the two ninety five call, bought the three hundred, twelve contracts. Collected eleven hundred and fifty eight, kept fifty four percent of that premium, which was twelve point nine percent of the four thousand eight hundred and forty two it had at risk. Take profit, six hundred and twenty four of eleven fifty eight maximum.
 
-Then press A.I. reasoning, and the agent writes the technical case from its own journal entry: what it measured, and what it did about it. Every figure is quoted from the record. It is not allowed to calculate.
+And press A.I. reasoning: the agent writes the case from its own journal. Expected value at realised volatility, twenty four dollars thirty nine. The market pricing it at six sixty one. An edge of seventeen dollars seventy seven per spread. Every figure quoted from the record — it is not allowed to calculate.
 
 <break time="0.7s" />
 
-[9d — Open positions. Brief, then back to the deck.]
-Five spreads are open, each showing its take profit and stop levels in dollars before either is hit. Real exposure, live — and every one cleared eight gates before it existed.
+[9d — Open positions. The QQQ row. Point at the payoff diagram.]
+And one still live. Q.Q.Q., sold the seven fourteen call, bought the seven nineteen, fourteen contracts. It collected nineteen hundred and forty six dollars, and the most it can lose is five thousand and fifty four.
+
+Add those and you get exactly seven thousand — five dollars of width, times a hundred, times fourteen contracts. That is what defined risk means, and you can check it on the screen. Take profit sits at nine hundred and seventy three, half the credit. The stop at minus three thousand eight hundred and ninety two, twice it. Both decided before the order existed.
+
+It says "wins if it stays below seven fourteen", and Q.Q.Q. is five dollars and forty three cents below that right now.
 
 <break time="1.0s" />
 
