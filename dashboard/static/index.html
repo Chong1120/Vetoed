@@ -1771,10 +1771,26 @@ function exitEvents(closed) {
   }));
 }
 
+/* A decision row with no candidate and no trade taken. The model call failed,
+   the agent took no action, and the row has nothing in any column that means
+   anything - dashes for candidate and edge, 0.00 confidence, N/A. */
+function isEmptyNoTrade(d) {
+  if (!d || d._exit || d._screen || d._screenOld) return false;
+  const c = d.candidate_json;
+  const hasCandidate = c && (c.underlying || c.short_symbol);
+  return !hasCandidate && String(d.llm_action || "") === "no_trade";
+}
+
 function decisions(rows, runs, orders, closed) {
   if (rows) {
     // Merge closes into the same list, newest first, so one timeline shows
     // opening and closing rather than two places to look.
+    // A cycle where the model failed and nothing was traded is not a decision
+    // about anything. It has no candidate, no edge, no confidence, and no
+    // outcome - it rendered as a row of dashes with "no_trade" beside them,
+    // which tells a reader nothing and reads as a broken row. The fact that
+    // the model failed is already in the cycle note, where it belongs.
+    rows = rows.filter(d => !isEmptyNoTrade(d));
     rows = rows.concat(exitEvents(closed), screenEvents(runs))
                .sort((a, b) => String(b.ts).localeCompare(String(a.ts)));
     // Auto-refresh runs every 30 seconds. Resetting the page on every call
