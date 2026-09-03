@@ -1292,11 +1292,13 @@ function closedPositions(rows) {
       <td class="mono">${r.contracts == null ? NB : r.contracts}</td>
       <td class="mono">${held}<div class="sub dim">${esc(shortTs(r.closed_ts))}</div></td>
       <td class="mono pos">${money(r.credit_total)}</td>
-      <td class="mono ${cls(pnl)}" style="font-weight:600">${signed(pnl)}</td>
+      <td class="mono ${r.realised_pnl == null ? "dim" : cls(pnl)}" style="font-weight:600">${
+        r.realised_pnl == null ? "not recorded" : signed(pnl)}</td>
       <td class="mono">${r.kept_pct == null ? NB : r.kept_pct.toFixed(0) + "%"}
-        <div class="sub dim">of premium</div></td>
+        <div class="sub dim">${r.kept_pct == null ? NB : "of premium"}</div></td>
       <td class="mono">${r.return_on_risk == null ? NB : r.return_on_risk.toFixed(1) + "%"}
-        <div class="sub dim">of ${money(r.max_loss_total)} risked</div></td>
+        <div class="sub dim">${r.return_on_risk == null ? NB
+          : "of " + money(r.max_loss_total) + " risked"}</div></td>
       <td>${r.exit_reason
             ? `<span class="pill ${/take profit/i.test(r.exit_reason) ? "on" : "warn"}">${esc(r.exit_reason)}</span>`
             : `<span class="dim">not recorded</span>`}</td>

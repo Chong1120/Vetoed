@@ -254,7 +254,12 @@ def reconcile(state: BrokerState, rows: list[dict] | None = None,
         # Filled once, now gone: expired, assigned, or closed elsewhere.
         r.corrections.append("%s: no longer held at the broker - marking closed"
                              % (short_sym or "?"))
-        journal.close_order(oid, float(row.get("realised_pnl") or 0.0),
+        # The result is NOT zero - it is unknown. This row is being closed
+        # because the broker stopped holding it, which says nothing about what
+        # it made. Writing 0.0 put a fabricated flat trade in the closed table.
+        pnl = row.get("realised_pnl")
+        journal.close_order(oid, None if pnl is None else float(pnl),
+                            reason="no longer held at the broker",
                             row_id=row.get("id"),
                             **({"path": path} if path else {}))
 

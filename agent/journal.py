@@ -316,7 +316,7 @@ def adopt_order(underlying: str, kind: str, short_symbol: str,
         return int(cur.lastrowid)
 
 
-def close_order(alpaca_order_id: str | None, realised_pnl: float,
+def close_order(alpaca_order_id: str | None, realised_pnl: float | None,
                 reason: str = "", row_id: int | None = None,
                 path: str = DB_PATH) -> None:
     """Record a close, and WHY.
@@ -325,6 +325,12 @@ def close_order(alpaca_order_id: str | None, realised_pnl: float,
     a position had closed for $484 and not whether that was a target hit or a
     stop taken - which is the more interesting half. Existing rows keep a NULL
     here; nothing invents a reason after the fact.
+
+    `realised_pnl` may be None, and NULL is the right value when the result is
+    genuinely unknown. Reconcile used to pass `or 0.0`, so a QQQ spread that
+    the agent had in fact closed for +$126 was written as +$0.00 and shown in
+    the closed table as "0% of premium, 0.0% on risk" - a fabricated flat
+    result sitting beside four real ones. A missing number must look missing.
 
     Matched by broker id where there is one, row id otherwise - the same fault
     as update_order_status had, and for the same reason. An ADOPTED row is
