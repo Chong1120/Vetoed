@@ -117,6 +117,14 @@ The LLM sits in the middle and cannot reach the broker without passing a gate it
 has no ability to influence. It *selects* from a pre-vetted shortlist; it never
 *constructs* a trade, sizes a position, or overrides a limit.
 
+## One-page write-up
+
+[**Vetoed-one-pager.pdf**](Vetoed-one-pager.pdf) — the whole system on a single
+page: the problem, the screen/select/gate/execute/reconcile workflow, how it
+uses Alpaca, the operating record, and what it does not claim.
+
+---
+
 ## What the dashboard shows that most do not
 
 [chong1120.github.io/Vetoed](https://chong1120.github.io/Vetoed/) — read-only,

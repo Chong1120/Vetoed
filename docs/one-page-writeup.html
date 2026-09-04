@@ -1,0 +1,101 @@
+<html><head><meta charset='utf-8'><style>
+@page { size: A4; margin: 11mm 13mm; }
+body { font-family: 'Segoe UI', Calibri, sans-serif; font-size: 9.2pt;
+       line-height: 1.31; color: #14181d; }
+h1 { font-size: 14pt; margin: 0 0 2pt; color: #0d1117; line-height: 1.18; }
+h2 { font-size: 10.2pt; margin: 7.5pt 0 2pt; color: #0b6b5c;
+     border-bottom: 0.6pt solid #cfe0dc; padding-bottom: 1.5pt; }
+p  { margin: 0 0 3.5pt; }
+ol { margin: 0 0 4pt 15pt; padding: 0; }
+li { margin: 0 0 2.5pt; }
+hr { border: none; border-top: 0.6pt solid #d5dde3; margin: 5pt 0; }
+code { font-family: Consolas, monospace; font-size: 8.6pt; color: #0b6b5c; }
+strong { color: #0d1117; }
+em { color: #47535e; }
+</style></head><body><h1>Vetoed — an autonomous options agent where the AI is the least-trusted component</h1>
+
+<p><strong>Alpaca AI Trading Agents Hackathon · paper trading only</strong></p>
+<p>Live dashboard: chong1120.github.io/Vetoed · Repo: github.com/Chong1120/Vetoed</p>
+
+<hr>
+
+<h2>The problem</h2>
+
+<p>If a language model can pick the trade, choose the size and send the order, one</p>
+<p>hallucinated contract is a real loss — and you cannot unit-test a language model.</p>
+<p>You <em>can</em> unit-test the code that decides whether to obey it. So in Vetoed the</p>
+<p>model&#x27;s entire authority is this: <strong>pick one item from a list it did not write.</strong></p>
+
+<h2>What it trades</h2>
+
+<p>Defined-risk credit spreads on SPY, QQQ, IWM and AAPL. Two legs always, sent as</p>
+<p>one atomic multi-leg order, so the maximum loss is a known number before the</p>
+<p>order exists and a naked short is structurally impossible.</p>
+
+<h2>How the agent works — the workflow</h2>
+
+
+<ol>
+<li><strong>Screen.</strong> A deterministic screener builds every valid spread from the live</li>
+</ol>
+<p>   chain and prices each one <strong>twice through the same model</strong>, changing only the</p>
+<p>   volatility input: 20-day realised against the market&#x27;s implied. The gap is the</p>
+<p>   premium being harvested, in dollars. Anything under <strong>$2.00</strong> is discarded.</p>
+<p>   *(This is our own model-derived measure, deliberately not the academic</p>
+<p>   variance risk premium, which is defined and measured differently.)*</p>
+
+<ol>
+<li><strong>Select.</strong> The LLM picks one candidate from that shortlist. Its answer is</li>
+</ol>
+<p>   validated against the list, so an invented contract is unexecutable, and the</p>
+<p>   position size it suggests is discarded.</p>
+
+<ol>
+<li><strong>Gate.</strong> A deterministic risk module sizes the trade and can overrule the</li>
+</ol>
+<p>   model at any confidence. <strong>Eight hard gates</strong>: 5% of equity per position, 25%</p>
+<p>   across all, a 3% daily-loss halt, a 25-contract cap, plus liquidity, DTE,</p>
+<p>   volatility and structural checks. Any one rejects the trade outright.</p>
+
+<ol>
+<li><strong>Execute.</strong> Orders go through <strong>Alpaca&#x27;s own MCP server</strong> — the single write</li>
+</ol>
+<p>   path in the system — as one atomic multi-leg order carrying a deterministic</p>
+<p>   SHA-1 order ID, so a restart cannot open the same spread twice.</p>
+
+<ol>
+<li><strong>Reconcile.</strong> Every cycle re-reads positions and open orders <strong>from Alpaca</strong>,</li>
+</ol>
+<p>   never from local state. The broker is the source of truth.</p>
+
+<h2>How it uses Alpaca</h2>
+
+<p>Alpaca MCP server for all order placement; Alpaca options chain, Greeks and</p>
+<p>quotes for screening; Alpaca positions and orders for reconciliation; Alpaca&#x27;s</p>
+<p>market clock to decide whether to trade at all. The process refuses to start</p>
+<p>unless <code>ALPACA_PAPER_TRADE=true</code>.</p>
+
+<h2>What the dashboard shows that most do not</h2>
+
+<p>Every rejection, by the reason that caused it. A typical cycle measures the</p>
+<p>chains and declines around <strong>1,500 spreads</strong> — open interest below the liquidity</p>
+<p>floor, premium under ten cents, delta outside the band, edge under $2.00 — each</p>
+<p>reason counted and naming real contracts. Each position also carries a note the</p>
+<p>model writes from that position&#x27;s journal entry, using figures quoted from the</p>
+<p>record; it is never allowed to calculate.</p>
+
+<h2>Operating record</h2>
+
+<p>Unattended on GitHub Actions, started by a Vercel cron: **148 cycles, 749</p>
+<p>candidates screened, 12 orders sent — 1.6% of what it looked at.** Currently 5</p>
+<p>open spreads and 7 closed, <strong>−$406 realised</strong> on a $100,000 paper account.</p>
+<p><strong>242 tests</strong>, most of them on the gates.</p>
+
+<h2>What I am not claiming</h2>
+
+<p>Quotes are indicative, not exchange best bid and offer. Skew is not modelled.</p>
+<p>Twenty-day realised volatility is an estimator, not a forecast. Four correlated</p>
+<p>tickers is not real diversification. The exit thresholds are unvalidated. A</p>
+<p>contest week proves nothing about profitability — the research motivates the</p>
+<p>idea; it does not validate this system.</p>
+</body></html>
