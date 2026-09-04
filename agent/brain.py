@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, asdict
@@ -87,6 +88,12 @@ FEATHERLESS_MODEL = _env_or("FEATHERLESS_MODEL", DEFAULT_FEATHERLESS_MODEL)
 ANTHROPIC_MODEL = _env_or("BRAIN_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = 16000
 LLM_TIMEOUT_SECONDS = 90
+# Two asks, not more. The faults this covers clear within a second or
+# resample cleanly; a provider that fails twice is having an outage, and
+# the deterministic selector is the right answer to that, not a third
+# ask eating into a 600-second cycle.
+LLM_ATTEMPTS = 2
+LLM_RETRY_PAUSE_SECONDS = 1.0
 
 
 def _placeholder(value: str) -> bool:
@@ -534,23 +541,57 @@ def call_featherless(prompt: str, api_key: str, model: str | None = None,
 
 
 def _decide_featherless(shortlist, prompt, api_key):
+    """Ask the model, once more if the first answer was not usable.
+
+    WHY A SECOND ASK
+    The fallback below is sound - deterministic selection is a real decision,
+    not a skipped cycle - but it is not the judgement layer, and a cycle that
+    silently used it is a cycle where the model did no work. On 4 Sep 2026
+    seven of sixteen decisions fell back: three because the provider answered
+    HTTP 200 with no choices at all ({"code": "no_response"}, which clears in
+    seconds), and the rest because the model returned malformed JSON or echoed
+    a contract symbol with a typo in it. Every one of those is a transient
+    sampling or provider fault that a second ask fixes.
+
+    WHAT IS DELIBERATELY NOT RETRIED
+    An HTTPError. A refused request is deterministic - a bad key, a bad model
+    id, a rejected body - and asking again buys the same refusal.
+
+    THIS IS NOT AN ORDER RETRY. Nothing here reaches the broker. `validate()`
+    still checks the answer against the shortlist and `risk.py` still sizes
+    it, so a second ask cannot widen what the model is allowed to do; it can
+    only change which shortlisted candidate is named. Order placement keeps
+    its no-retry rule, because there a second attempt could open a second
+    spread.
+    """
     # Claude's schema is enforced by the API, so its prompt stays lean.
-    try:
-        text = call_featherless(prompt + JSON_INSTRUCTIONS, api_key)
-    except urllib.error.HTTPError as exc:
-        detail = ""
+    worst = None
+    for attempt in range(LLM_ATTEMPTS):
+        if attempt:
+            time.sleep(LLM_RETRY_PAUSE_SECONDS)
         try:
-            detail = exc.read().decode("utf-8", "replace")[:300]
-        except Exception:
-            pass
-        d = deterministic_decide(shortlist, "Featherless HTTP %s" % exc.code)
-        d.error = "HTTPError %s: %s" % (exc.code, detail or exc.reason)
-        return d
-    except Exception as exc:
-        d = deterministic_decide(shortlist, "Featherless call failed")
-        d.error = "%s: %s" % (type(exc).__name__, exc)
-        return d
-    return _parse_and_validate(text, shortlist)
+            text = call_featherless(prompt + JSON_INSTRUCTIONS, api_key)
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                pass
+            d = deterministic_decide(shortlist, "Featherless HTTP %s" % exc.code)
+            d.error = "HTTPError %s: %s" % (exc.code, detail or exc.reason)
+            return d
+        except Exception as exc:
+            worst = deterministic_decide(shortlist, "Featherless call failed")
+            worst.error = "%s: %s" % (type(exc).__name__, exc)
+            continue
+        d = _parse_and_validate(text, shortlist)
+        # A model that answers "no_trade" has judged, and `validate` leaves
+        # `error` clear when it does. Only a faulty answer sets it, so this
+        # asks again for a blank or a mangled reply and never for a real one.
+        if not d.error:
+            return d
+        worst = d
+    return worst
 
 
 def _decide_anthropic(shortlist, prompt, api_key):
