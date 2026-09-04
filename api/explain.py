@@ -21,6 +21,7 @@ the raw facts, exactly as it does now.
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -166,6 +167,45 @@ def _facts(data, leg):
     return out
 
 
+# A note that came apart, and how to tell.
+#
+# The provider does not only fail by returning nothing. On 4 Sep 2026 an open
+# QQQ position's note came back as the letter "I" followed by 797 exclamation
+# marks: HTTP 200, a full string, non-empty, and completely degenerate. The
+# emptiness check let it through and the endpoint then cached it for an hour,
+# so the page showed a solid bar of punctuation where the reasoning should be.
+#
+# These thresholds are measured from real output of this prompt rather than
+# guessed. Its notes run 450-900 characters, are 89-92% letters and spaces,
+# their commonest non-space character is "e" at 8-9%, and they carry 85-91
+# words. The degenerate one was 0%, 100% and 1. Nothing sits near the middle,
+# so the cutoffs are deliberately loose - this must never reject a real note.
+MIN_NOTE_CHARS = 40
+MIN_NOTE_WORDS = 12
+MIN_PROSE_RATIO = 0.65          # letters and spaces, as a share of the whole
+MAX_SINGLE_CHAR_SHARE = 0.30    # any one non-space character
+REPEAT_RUN = re.compile(r"(.{1,12}?)\1{7,}", re.S)
+
+
+def _usable(text):
+    """True if this reads like prose about a position, not a stuck token."""
+    t = (text or "").strip()
+    if len(t) < MIN_NOTE_CHARS or len(t.split()) < MIN_NOTE_WORDS:
+        return False
+    prose = sum(1 for ch in t if ch.isalpha() or ch.isspace())
+    if prose / len(t) < MIN_PROSE_RATIO:
+        return False
+    counts = {}
+    for ch in t:
+        if not ch.isspace():
+            counts[ch] = counts.get(ch, 0) + 1
+    if counts and max(counts.values()) / len(t) > MAX_SINGLE_CHAR_SHARE:
+        return False
+    # Catches a short fragment looping - "ababab..." keeps every character
+    # frequency low while saying nothing.
+    return REPEAT_RUN.search(t) is None
+
+
 def explain(leg):
     key = (os.environ.get("FEATHERLESS_API_KEY") or "").strip()
     if not key:
@@ -210,8 +250,12 @@ def explain(leg):
                 payload = json.loads(fh.read().decode("utf-8"))
             text = ((payload.get("choices") or [{}])[0].get("message")
                     or {}).get("content") or ""
-            if text:
+            # A degenerate answer is a failed answer. Treat it exactly like an
+            # empty one: ask again, and if the second is no better, say the
+            # provider is unwell rather than caching nonsense for an hour.
+            if _usable(text):
                 break
+            text = ""
         except urllib.error.HTTPError as exc:
             # A refusal is deterministic - the key, the model id or the body
             # is wrong - and asking again only spends another second on the
