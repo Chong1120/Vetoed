@@ -44,6 +44,23 @@ TABLES = [
 # falls back to the contract it actually holds.
 FALLBACK_KEY = {"orders": ("ts", "short_symbol", "long_symbol")}
 
+# Tables that hold CURRENT STATE, not history.
+#
+# record_broker_positions() deletes the previous snapshot before writing the
+# new one, on purpose: the dashboard has to show what Alpaca holds now, not
+# every reading ever taken. A row-wise union defeats that. Each side's
+# snapshot carries its own ts, so both survive the merge and the table gains a
+# full set of legs every time a journal push conflicts - eight rows became
+# sixteen on 4 Sep 2026, describing four spreads as eight. The live proxy
+# normally supplies positions and hides it; the moment that proxy is
+# unreachable the published page falls back to this table and doubles the
+# book.
+#
+# Union first anyway - when two sides disagree about which reading is newest,
+# taking both and then deciding is safer than picking during the merge - then
+# keep only the newest ts, which is what the table is defined to mean.
+SNAPSHOT_TABLES = {"broker_positions": "ts"}
+
 
 def _columns(con, schema, table):
     return [r[1] for r in con.execute("pragma %s.table_info(%s)" % (schema, table))]
@@ -113,6 +130,21 @@ def merge(source_path, target_path, verbose=True):
 
         if n_new and verbose:
             print("  %-18s +%d row(s) recovered" % (table, n_new))
+
+    for table, ts_col in SNAPSHOT_TABLES.items():
+        try:
+            cols = _columns(con, "main", table)
+        except sqlite3.OperationalError:
+            continue
+        if ts_col not in cols:
+            continue
+        # An empty table makes max() NULL and the comparison NULL, so nothing
+        # is deleted - which is the right answer for a table with no readings.
+        dropped = con.execute(
+            "delete from main.%s where %s <> (select max(%s) from main.%s)"
+            % (table, ts_col, ts_col, table)).rowcount
+        if dropped and verbose:
+            print("  %-18s -%d stale snapshot row(s)" % (table, dropped))
 
     con.commit()
     con.execute("detach src")
