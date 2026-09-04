@@ -21,6 +21,7 @@ the raw facts, exactly as it does now.
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -188,16 +189,42 @@ def explain(leg):
         headers={"Authorization": "Bearer " + key,
                  "Content-Type": "application/json",
                  "User-Agent": "vetoed/0.1 (+https://github.com/Chong1120/Vetoed)"})
-    try:
-        with urllib.request.urlopen(req, timeout=25) as fh:
-            payload = json.loads(fh.read().decode("utf-8"))
-        text = ((payload.get("choices") or [{}])[0].get("message") or {}).get("content")
-        if not text:
-            return 502, {"error": "model returned nothing for %r" % MODEL}
-    except urllib.error.HTTPError as exc:
-        return 502, {"error": "model returned HTTP %d" % exc.code}
-    except Exception as exc:                              # noqa: BLE001
-        return 502, {"error": "%s" % type(exc).__name__}
+    # WHY A RETRY HERE, AND NOWHERE NEAR AN ORDER
+    # The execution path deliberately has no retry: asking twice there could
+    # open a second spread. This endpoint only writes English. Asking twice
+    # costs a second of model time and can do nothing else, so the rule that
+    # protects the broker does not apply to it.
+    #
+    # The provider answers HTTP 200 with no `choices` when its completion
+    # service is momentarily unavailable - {"code": "no_response"}. It clears
+    # in seconds: on 4 Sep three consecutive agent cycles failed that way and
+    # the next one succeeded. Without a retry that blip is a reader pressing
+    # "AI reasoning" and being told the position cannot be explained, which
+    # reads as a broken feature rather than the few-second outage it is.
+    text = ""
+    for attempt in range(2):
+        if attempt:
+            time.sleep(1.0)
+        try:
+            with urllib.request.urlopen(req, timeout=25) as fh:
+                payload = json.loads(fh.read().decode("utf-8"))
+            text = ((payload.get("choices") or [{}])[0].get("message")
+                    or {}).get("content") or ""
+            if text:
+                break
+        except urllib.error.HTTPError as exc:
+            # A refusal is deterministic - the key, the model id or the body
+            # is wrong - and asking again only spends another second on the
+            # same answer.
+            return 502, {"error": "model returned HTTP %d" % exc.code}
+        except Exception as exc:                          # noqa: BLE001
+            if attempt:
+                return 502, {"error": "%s" % type(exc).__name__}
+    if not text:
+        # Name the provider, not the model. The model id is the thing a reader
+        # would go and check, and it is not what is wrong.
+        return 503, {"error": "the model provider is not responding just now "
+                              "- try again in a moment"}
 
     return 200, {"leg": leg, "explanation": text.strip(), "state": facts["state"]}
 
