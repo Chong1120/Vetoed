@@ -280,6 +280,78 @@ def reconcile(state: BrokerState, rows: list[dict] | None = None,
     return r
 
 
+def _filled(order):
+    """(signed avg price, filled qty, filled_at) for a fully filled order.
+
+    None for anything else - not yet filled, cancelled, or a shape we cannot
+    read. None means "ask again next cycle", never "it filled at zero".
+    """
+    if isinstance(order, dict) and isinstance(order.get("result"), dict):
+        order = order["result"]
+    if not isinstance(order, dict):
+        return None
+    if str(order.get("status") or "").lower() != "filled":
+        return None
+    try:
+        price = float(order.get("filled_avg_price"))
+        qty = float(order.get("filled_qty") or 0)
+    except (TypeError, ValueError):
+        return None
+    if qty <= 0:
+        return None
+    return price, qty, order.get("filled_at")
+
+
+async def sync_fills(mcp, path: str | None = None, limit: int = 20) -> list:
+    """Replace the journal's estimated prices with Alpaca's actual fills.
+
+    See journal.record_open_fill for why. Runs before exits are managed, so a
+    take-profit or stop is measured against the premium that was really
+    received. Reads only - order_by_id - so it adds nothing to the write path.
+
+    Bounded per cycle so a backlog cannot stall one, and it never raises: a
+    fill that cannot be read this cycle is simply read on the next.
+    """
+    kw = {"path": path} if path else {}
+    notes: list = []
+    try:
+        todo = journal.rows_needing_fill_sync(**kw)
+    except Exception as exc:                              # noqa: BLE001
+        return ["fill sync skipped (%s)" % type(exc).__name__]
+    asked = 0
+    # Opens first: a close's P&L is computed from the open's fill, and the
+    # journal refuses to compute it against a quote.
+    for kind in ("opens", "closes"):
+        for row in todo[kind]:
+            if asked >= limit:
+                return notes
+            asked += 1
+            oid = row["alpaca_order_id"] if kind == "opens" else row["close_order_id"]
+            sym = row.get("short_symbol") or "?"
+            try:
+                got = _filled(await mcp.order_by_id(oid))
+            except Exception as exc:                      # noqa: BLE001
+                notes.append("%s: could not read order %s (%s)"
+                              % (sym, str(oid)[:8], type(exc).__name__))
+                continue
+            if not got:
+                continue
+            price, qty, filled_at = got
+            if kind == "opens":
+                credit = -price               # Alpaca reports a credit as negative
+                if credit <= 0:
+                    notes.append("%s: open filled at %.4f, not a credit - left as "
+                                 "recorded" % (sym, price))
+                    continue
+                journal.record_open_fill(row["id"], credit, qty, **kw)
+                notes.append("%s: open filled at $%.4f credit (quoted $%.4f)"
+                             % (sym, credit, float(row.get("credit") or 0)))
+            else:
+                journal.record_close_fill(row["id"], price, filled_at, **kw)
+                notes.append("%s: close filled at $%.4f" % (sym, price))
+    return notes
+
+
 def _occ(sym: str):
     """(root, expiry, right, strike) from an OCC symbol, or None."""
     m = re.match(r"^([A-Z]+)(\d{6})([CP])(\d{8})$", str(sym or ""))

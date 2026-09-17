@@ -132,6 +132,8 @@ MIGRATIONS = [
     "ALTER TABLE orders ADD COLUMN exit_reason TEXT",
     "ALTER TABLE runs ADD COLUMN shortlist_json TEXT",
     "ALTER TABLE runs ADD COLUMN eliminated_json TEXT",
+    "ALTER TABLE orders ADD COLUMN close_order_id TEXT",
+    "ALTER TABLE orders ADD COLUMN close_fill_price REAL",
 ]
 
 
@@ -330,6 +332,7 @@ def adopt_order(underlying: str, kind: str, short_symbol: str,
 
 def close_order(alpaca_order_id: str | None, realised_pnl: float | None,
                 reason: str = "", row_id: int | None = None,
+                close_order_id: str | None = None,
                 path: str = DB_PATH) -> None:
     """Record a close, and WHY.
 
@@ -361,14 +364,117 @@ def close_order(alpaca_order_id: str | None, realised_pnl: float | None,
             # table - counted twice in the realised total, +$473 of a $67 figure
             # that was really -$406.
             dead = ",".join("?" for _ in DEAD_STATUSES)
-            c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=? "
+            c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=?,"
+                      " close_order_id=COALESCE(?, close_order_id) "
                       "WHERE alpaca_order_id=? AND status NOT IN (%s)" % dead,
-                      (now(), realised_pnl, reason or None, alpaca_order_id)
-                      + tuple(DEAD_STATUSES))
+                      (now(), realised_pnl, reason or None, close_order_id,
+                       alpaca_order_id) + tuple(DEAD_STATUSES))
         elif row_id is not None:
-            c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=? "
-                      "WHERE id=?",
-                      (now(), realised_pnl, reason or None, int(row_id)))
+            c.execute("UPDATE orders SET closed_ts=?, realised_pnl=?, exit_reason=?,"
+                      " close_order_id=COALESCE(?, close_order_id) WHERE id=?",
+                      (now(), realised_pnl, reason or None, close_order_id,
+                       int(row_id)))
+
+
+# --------------------------------------------------------------------------- #
+# fills - the broker's prices replace our estimates
+# --------------------------------------------------------------------------- #
+#
+# The journal recorded the credit the SCREENER QUOTED, not the credit Alpaca
+# FILLED at, and on 29 of the first 30 trades those differed: the IWM 291/293
+# spread was quoted at $0.495 and filled at $0.46. Every figure downstream
+# inherited the quote - "collected" overstated by $6 to $225 a trade, "kept"
+# and "on risk" computed from the wrong base, and the exit rules themselves:
+# take-profit at 50% of a premium that was never received, the stop at 2x the
+# same. Realised P&L was taken from unrealised P&L at the moment the exit
+# fired, which drifted up to $25 from the fill that actually closed it.
+#
+# So once Alpaca reports an order filled, its own prices are written over
+# ours. The quote is not lost - it stays in the decision's candidate_json,
+# which is where "what the agent saw" belongs. The order row is "what happened".
+
+def _strike(occ: str | None) -> float | None:
+    """Strike from an OCC symbol: IWM260925C00291000 -> 291.0."""
+    try:
+        return int(str(occ)[-8:]) / 1000.0
+    except (TypeError, ValueError):
+        return None
+
+
+def record_open_fill(row_id: int, credit: float, filled_qty: float,
+                     path: str = DB_PATH) -> None:
+    """Write the broker's opening fill: net credit per share, and quantity.
+
+    `credit` is positive for money received. Alpaca reports a credit spread's
+    filled_avg_price as negative; the caller flips the sign. fill_price holds
+    the same positive figure, matching what adopted rows have always stored.
+    """
+    with connect(path) as c:
+        row = c.execute("SELECT short_symbol, long_symbol, contracts FROM orders "
+                        "WHERE id=?", (int(row_id),)).fetchone()
+        if row is None:
+            return
+        qty = float(filled_qty) or float(row["contracts"] or 0)
+        s, l = _strike(row["short_symbol"]), _strike(row["long_symbol"])
+        max_loss = None
+        if s is not None and l is not None:
+            max_loss = round((abs(s - l) - credit) * 100 * qty, 2)
+        c.execute("UPDATE orders SET credit=?, fill_price=?, filled_qty=?,"
+                  " max_loss_total=COALESCE(?, max_loss_total) WHERE id=?",
+                  (credit, credit, qty, max_loss, int(row_id)))
+
+
+def record_close_fill(row_id: int, debit: float, filled_at: str | None,
+                      path: str = DB_PATH) -> None:
+    """Write the broker's closing fill, and the realised P&L it implies.
+
+    `debit` is what the close cost per share (Alpaca's filled_avg_price on the
+    closing order, positive for money paid). Realised P&L is then exactly what
+    the account made: credit in, debit out, times the contracts and 100.
+
+    Only once the OPEN fill is known - otherwise this would subtract a real
+    debit from a quoted credit, which is the error being removed.
+    """
+    with connect(path) as c:
+        row = c.execute("SELECT credit, fill_price, filled_qty, contracts FROM "
+                        "orders WHERE id=?", (int(row_id),)).fetchone()
+        if row is None or row["fill_price"] is None:
+            return
+        qty = float(row["filled_qty"] or 0) or float(row["contracts"] or 0)
+        pnl = round((float(row["credit"]) - float(debit)) * 100 * qty, 2)
+        c.execute("UPDATE orders SET close_fill_price=?, realised_pnl=?,"
+                  " closed_ts=COALESCE(?, closed_ts) WHERE id=?",
+                  (float(debit), pnl, _iso(filled_at), int(row_id)))
+
+
+def _iso(ts: str | None) -> str | None:
+    """Alpaca's 2026-09-16T19:22:56.733253Z -> the journal's own format."""
+    if not ts:
+        return None
+    try:
+        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def rows_needing_fill_sync(path: str = DB_PATH) -> dict:
+    """Rows whose prices are still our estimate rather than Alpaca's fill.
+
+    opens:  sent to Alpaca (so there is an order to ask about), no fill yet.
+    closes: closed by an order we sent, closing fill not yet recorded.
+    Dead rows are skipped - there is no fill to find.
+    """
+    dead = ",".join("?" for _ in DEAD_STATUSES)
+    opens = _rows("SELECT * FROM orders WHERE alpaca_order_id IS NOT NULL"
+                  " AND fill_price IS NULL"
+                  " AND LOWER(COALESCE(status,'')) NOT IN (%s) ORDER BY id"
+                  % dead, DEAD_STATUSES, path)
+    closes = _rows("SELECT * FROM orders WHERE close_order_id IS NOT NULL"
+                   " AND close_fill_price IS NULL"
+                   " AND LOWER(COALESCE(status,'')) NOT IN (%s) ORDER BY id"
+                   % dead, DEAD_STATUSES, path)
+    return {"opens": opens, "closes": closes}
 
 
 def snapshot_equity(equity: float, last_equity: float, cash: float,
@@ -452,6 +558,9 @@ def all_orders(limit: int = 200, path: str = DB_PATH) -> list[dict]:
 #   not_filled reconcile.py checked with the broker and found nothing
 #   analysis_only an analysis pass reached a judgement and withheld the entry;
 #              no order was ever built, so there is nothing to hold risk
+#   duplicate  a second row for a trade another row already records. Kept
+#              rather than deleted: a delete is undone by the next journal
+#              merge from a session still holding the row, a status is not
 #
 # NOTE what is deliberately ABSENT: 'uncertain'. When a submission times out
 # we do not know whether Alpaca received it, and the asymmetry is not close -
@@ -460,7 +569,7 @@ def all_orders(limit: int = 200, path: str = DB_PATH) -> list[dict]:
 # therefore treated as live risk until reconcile.py resolves them against the
 # broker, at which point they become 'not_filled' or a confirmed position.
 DEAD_STATUSES = ("analysis_only", "canceled", "cancelled", "rejected", "expired",
-                 "dry_run", "failed", "not_filled")
+                 "dry_run", "failed", "not_filled", "duplicate")
 
 
 def open_spreads(path: str = DB_PATH) -> list[dict]:

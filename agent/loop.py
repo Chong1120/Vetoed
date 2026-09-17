@@ -196,8 +196,17 @@ async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool,
             error("could not fetch positions: %s" % exc)
             return actions
 
+    # One physical spread, one close order. If two journal rows ever describe
+    # the same legs - as happened on 16 Sep, when a stale session adopted a
+    # spread the journal already held - both would read the broker's same
+    # unrealised P&L, and both could send a close for the same 25 contracts.
+    # The second would be buying back a short that no longer exists.
+    closed_pairs: set = set()
+
     for row in open_rows:
         short_sym, long_sym = row.get("short_symbol"), row.get("long_symbol")
+        if (short_sym, long_sym) in closed_pairs:
+            continue
         sp, lp = legs.get(short_sym), legs.get(long_sym)
         if not sp or not lp:
             continue  # not (yet) filled, or already gone
@@ -237,6 +246,7 @@ async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool,
 
         log("CLOSING %s/%s - %s" % (short_sym, long_sym, reason))
         actions.append("%s: %s" % (short_sym, reason))
+        closed_pairs.add((short_sym, long_sym))
         if dry_run:
             log("  DRY RUN - not sending close order")
             continue
@@ -245,7 +255,14 @@ async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool,
             short_sym, long_sym, contracts,
             client_order_id=new_client_order_id("close"))
         if res.ok:
-            journal.close_order(row.get("alpaca_order_id") or "", unreal, reason)
+            # row_id: an ADOPTED row has no alpaca_order_id, so matching on it
+            # alone updated nothing - the +$600 IWM take-profit on 16 Sep was
+            # sent, filled, and never written. close_order_id: so the next
+            # cycle can read the closing fill and replace this unrealised
+            # estimate with what the account actually made.
+            journal.close_order(row.get("alpaca_order_id") or "", unreal, reason,
+                                row_id=row.get("id"),
+                                close_order_id=(res.order or {}).get("id"))
             log("  close order submitted: %s" % res.order.get("id"))
         else:
             error("  close FAILED: %s" % res.error)
@@ -311,6 +328,11 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
             warn("reconcile: %s" % note)
         log("reconcile: %d open spread(s) confirmed, %d orphan leg(s)"
             % (len(rec.open_spreads), len(rec.orphan_legs)))
+
+        # Alpaca's fill prices over our quotes, before any exit is measured.
+        if state.reachable:
+            for note in await reconcile.sync_fills(mcp):
+                log("fills: %s" % note)
 
         # --- 2. manage what we already hold -------------------------------- #
         closed = await manage_positions(mcp, market, dry_run,
