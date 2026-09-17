@@ -67,7 +67,18 @@ jobs:
     timeout-minutes: 355
 
     steps:
+      # ref: main, not the commit that triggered the run. A scheduled run that
+      # queues behind a live session keeps the commit from when it QUEUED - on
+      # 16 Sep the 17:00 backup queued at 17:39 and only started at 18:51, when
+      # the main session's budget ran out, holding a journal 70 minutes old.
+      # It had never seen the IWM spread opened at 18:31, found those legs at
+      # Alpaca, and adopted them as a second row: one trade, two rows, and the
+      # take-profit that closed it for +$600 recorded against neither.
+      # Checking out the branch tip at start picks up the previous session's
+      # final journal, which the concurrency group guarantees is pushed.
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
