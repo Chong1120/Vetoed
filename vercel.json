@@ -1,12 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "ignoreCommand": "if git rev-parse -q --verify HEAD^2 >/dev/null 2>&1; then exit 1; fi; git log -1 --format=%s | grep -q '^Journal: cycle ' || exit 1; git diff --quiet HEAD^ HEAD -- . ':(exclude)journal' || exit 1; exit 0",
-  "crons": [
-    {
-      "path": "/api/start-session",
-      "schedule": "0 13 * * 1-5"
-    }
-  ],
   "headers": [
     {
       "source": "/api/(live|journal)",

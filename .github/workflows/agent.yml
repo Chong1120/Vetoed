@@ -23,12 +23,17 @@
 name: Vetoed agent
 
 on:
-  schedule:
-    # 13:25 UTC = 09:25 AM EDT (US Market Open Monday-Friday).
-    # Runs the full session container automatically for the entire trading day.
-    # Also includes 17:00 UTC (1:00 PM EDT) as a fail-safe backup trigger.
-    - cron: "25 13 * * 1-5"
-    - cron: "0 17 * * 1-5"
+  # STOPPED 6 Oct 2026, on request: no automatic session, and so no model
+  # spend. The manual trigger below is untouched - choosing mode "session"
+  # runs a full day exactly as before - and uncommenting these two lines puts
+  # the daily schedule back. The Vercel cron that used to start the session is
+  # removed from vercel.json for the same reason.
+  #
+  # 13:25 UTC = 09:25 AM EDT (US Market Open Monday-Friday); 17:00 UTC was the
+  # fail-safe backup trigger.
+  # schedule:
+  #   - cron: "25 13 * * 1-5"
+  #   - cron: "0 17 * * 1-5"
 
   # Manual trigger, for demos and for proving the thing works without waiting
   # for a tick. Defaults to a DRY RUN so an accidental click cannot trade.
