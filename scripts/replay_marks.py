@@ -53,8 +53,10 @@ def creds() -> dict:
             "APCA-API-SECRET-KEY": env["ALPACA_SECRET_KEY"]}
 
 
-def mark_history(verbose: bool = True) -> dict:
+def mark_history(verbose: bool = True, cache: str | None = None) -> dict:
     """{symbol: {ts: unrealised}} from every journal commit in the history."""
+    if cache and os.path.exists(cache):
+        return json.load(open(cache))
     shas = subprocess.run(["git", "log", "--format=%H", "--", "journal/trades.db"],
                           cwd=ROOT, capture_output=True, text=True).stdout.split()
     marks: dict = {}
@@ -77,6 +79,8 @@ def mark_history(verbose: bool = True) -> dict:
             continue
         if verbose and i % 150 == 0:
             print("  %d/%d commits" % (i, len(shas)), flush=True)
+    if cache:
+        json.dump(marks, open(cache, "w"))
     return marks
 
 
@@ -157,10 +161,11 @@ def simulate(t: dict, take: float | None, stop: float | None):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json")
+    ap.add_argument("--cache", help="store/reuse the extracted marks here")
     args = ap.parse_args()
     H = creds()
     print("reading the mark history out of the journal's git commits...")
-    marks = mark_history()
+    marks = mark_history(cache=args.cache)
     print("  marks for %d option symbols" % len(marks))
     trades = load_trades(H)
     attach_paths(trades, marks)
@@ -202,22 +207,27 @@ def main() -> int:
     print("=== STOP LEVELS, ON THE REAL MARKS ===")
     print("Take-profit stays at 0.5 (anything higher is unobservable - the agent")
     print("always closed there, so there is no record of what came next).")
-    print("%-8s %9s %9s %8s %9s %9s" % ("stop", "total", "vs actual", "win%", "avg win", "worst"))
+    print("%-6s %8s %7s %6s %8s %6s %9s %9s %8s"
+          % ("stop", "total", "winners", "losers", "avg win", "avg loss", "worst loss",
+             "breakeven", "actual"))
     actual_total = sum(t["actual"] for t in usable)
     rows = []
     for stop in (0.75, 1.0, 1.25, 1.5, 2.0, 3.0, None):
         res = [simulate(t, 0.5, stop) for t in usable]
         pnl = [r[0] for r in res]
         wins = [p for p in pnl if p > 0]
-        rows.append({"stop": stop, "total": round(sum(pnl)),
-                     "win": round(100 * len(wins) / len(pnl), 1),
-                     "avg_win": round(sum(wins) / len(wins)) if wins else 0,
-                     "worst": round(min(pnl)),
-                     "from_marks": sum(1 for r in res if r[2])})
-        print("%-8s %9d %9d %7.1f%% %9d %9d"
+        losses = [p for p in pnl if p <= 0]
+        aw = sum(wins) / len(wins) if wins else 0
+        al = sum(losses) / len(losses) if losses else 0
+        be = 100 * abs(al) / (aw + abs(al)) if (aw + abs(al)) else 0
+        rows.append({"stop": stop, "total": round(sum(pnl)), "n_win": len(wins),
+                     "n_loss": len(losses), "avg_win": round(aw), "avg_loss": round(al),
+                     "worst": round(min(pnl)), "win": round(100*len(wins)/len(pnl), 1),
+                     "breakeven": round(be, 1)})
+        print("%-6s %8d %7d %6d %8d %6d %9d %8.1f%% %7.1f%%"
               % ("none" if stop is None else "%gx" % stop, rows[-1]["total"],
-                 rows[-1]["total"] - actual_total, rows[-1]["win"],
-                 rows[-1]["avg_win"], rows[-1]["worst"]))
+                 len(wins), len(losses), rows[-1]["avg_win"], rows[-1]["avg_loss"],
+                 rows[-1]["worst"], rows[-1]["breakeven"], rows[-1]["win"]))
     print("  actual, same %d trades: %+d" % (len(usable), actual_total))
     if args.json:
         json.dump({"actual": actual_total, "n": len(usable), "stops": rows},

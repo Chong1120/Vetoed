@@ -71,17 +71,37 @@ from agent.screener import UNIVERSE, screen
 # The 20 trades that ever traded 1x credit or more against the position
 # realised -$21,745 and would have settled at +$3,037.
 #
-# So the delta stop is gone - 11 trades, -$17,575, not one of them a winner -
-# and the price stop moves to 3x, which over the whole month never triggered
-# and so is identical to having none, while still bounding a gap in a regime
-# this sample has not seen. The real cap was always the long leg: risk.py
-# sizes every position so that its full width is at most 5% of equity.
+# So the delta stop is gone: 11 trades, -$17,575, not one of them a winner.
+# That deletion is worth +$8,506 of the swing and the evidence for it is the
+# strongest thing in the file.
+#
+# The price stop STAYS AT 2x. Going to 3x scored better on the month (+$11,582
+# against +$8,448) but the whole of that gap is 8 trades out of 68, and the
+# case against widening it further is that the margin over break-even barely
+# moves while the average loss keeps growing:
+#
+#     stop   avg loss   losers   win rate   needs   margin
+#     1.5x    -$1,913     13       80.9%    79.5%    +1.4
+#     2.0x    -$2,148     10       85.3%    80.6%    +4.7   <- here
+#     3.0x    -$2,381      8       88.2%    82.3%    +5.9
+#
+# Five points of margin is thin either way, and 2x keeps a stop that actually
+# functions. Widening does not buy a better tail: the worst five trades are
+# identical at 2x, at 3x and with no stop at all (-5054, -4950, -3300, -1850,
+# -1650), because those losses arrive through expiry rather than through a
+# mark a stop could catch. The real cap was always the long leg - risk.py
+# sizes every position so its full width is at most 5% of equity.
 #
 # Deliberately UNCHANGED: take profit at 50%. A higher target cannot be
 # measured from this data - the agent always closed there, so nothing recorded
 # what the position did next.
+#
+# Also unchanged, and earning its place: the close at DTE 1. Across the nine
+# trades that reached it, closing beat letting them settle by $1,728, almost
+# all of it one QQQ spread that closed for +$126 and would have settled at
+# -$5,054. Expiry day is where the max losses actually come from.
 TAKE_PROFIT_FRACTION = 0.50   # buy back at 50% of max profit
-STOP_LOSS_MULTIPLE = 3.0      # disaster backstop only; see above
+STOP_LOSS_MULTIPLE = 2.0      # close if losing 2x the credit received
 CLOSE_AT_DTE = 1              # never carry into expiry day
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

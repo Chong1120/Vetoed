@@ -6,8 +6,13 @@ actually published (scripts/replay_marks.py, which reads them out of the
 journal's own git history) gave:
 
     stop at 0.75x credit   -$627       stop at 1.5x    +$2,312
-    stop at 1.0x           -$3,473     stop at 2.0x    +$8,448   <- it was here
+    stop at 1.0x           -$3,473     stop at 2.0x    +$8,448   <- kept here
     stop at 1.25x          -$5,481     no stop        +$11,582
+
+The stop stays at 2x: the step to 3x is 8 trades out of 68 and moves the
+margin over break-even from 4.7 points to 5.9, while the worst five losses are
+identical at 2x, 3x and no stop. What changed is the delta stop, which is
+deleted.
 
 The 20 trades that ever traded 1x credit or more against the position realised
 -$21,745 and would have settled at +$3,037. The delta stop alone took 11
@@ -79,7 +84,7 @@ def test_the_delta_stop_is_gone():
     assert not hasattr(loop, "DELTA_STOP_MULTIPLE")
 
 
-@pytest.mark.parametrize("multiple", [1.0, 1.5, 2.0, 2.9])
+@pytest.mark.parametrize("multiple", [1.0, 1.5, 1.9])
 def test_a_drawdown_the_record_says_recovers_is_left_alone(monkeypatch, multiple):
     """At 2x this used to close. Those are the trades that came back."""
     mcp, actions = _run(monkeypatch, [_row()], -CREDIT_TOTAL * multiple)
@@ -87,11 +92,12 @@ def test_a_drawdown_the_record_says_recovers_is_left_alone(monkeypatch, multiple
     assert actions == []
 
 
-def test_the_disaster_backstop_still_fires(monkeypatch):
-    """Wide enough never to have triggered in the sample, kept for the regime
-    the sample does not contain."""
-    assert loop.STOP_LOSS_MULTIPLE == 3.0
-    mcp, actions = _run(monkeypatch, [_row()], -CREDIT_TOTAL * 3.1)
+def test_the_stop_still_fires_at_twice_the_credit(monkeypatch):
+    """Kept at 2x. 3x scored better over the month (+$11,582 to +$8,448) but
+    that gap is 8 trades of 68, the margin over break-even moves only 4.7 to
+    5.9 points, and the worst five trades are identical either way."""
+    assert loop.STOP_LOSS_MULTIPLE == 2.0
+    mcp, actions = _run(monkeypatch, [_row()], -CREDIT_TOTAL * 2.1)
     assert len(mcp.closes) == 1
     assert "stop loss" in actions[0]
 
