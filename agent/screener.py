@@ -75,7 +75,7 @@ from agent.data import MarketSnapshot, OptionRow, atm_iv
 # screening parameters
 # --------------------------------------------------------------------------- #
 
-UNIVERSE = ["SPY", "QQQ", "IWM", "AAPL"]
+UNIVERSE = ["SPY", "QQQ", "IWM", "AAPL", "SMH"]
 
 DTE_MIN = 2          # 1DTE gamma is brutal; 2 is the floor
 DTE_MAX = 14         # beyond this, too little decays inside the contest window
@@ -85,7 +85,7 @@ DTE_MAX = 14         # beyond this, too little decays inside the contest window
 # NOTE: Alpaca's option snapshot exposes NO daily volume - only open interest
 # is available, and fetching daily bars for ~2,400 contracts per cycle is not
 # practical. OI alone is therefore the liquidity proxy here.
-MIN_OI = {"SPY": 500, "QQQ": 500, "IWM": 250, "AAPL": 100}
+MIN_OI = {"SPY": 500, "QQQ": 500, "IWM": 250, "AAPL": 100, "SMH": 250}
 MIN_OI_DEFAULT = 250
 
 # The SHORT leg is what we sell - it must pay real premium.
@@ -101,9 +101,13 @@ MAX_SPREAD_PCT = 0.10
 SHORT_DELTA_MIN = 0.10
 SHORT_DELTA_MAX = 0.35   # Bakshi & Kapadia: premium is richer nearer the money
 
-WIDTHS = [1.0, 2.0, 5.0]
-WIDTH_PREFERENCE = {1.0: 0.80, 2.0: 1.00, 5.0: 1.00}  # $1 wide pays too little
-                                                       # against double bid-ask
+# 2.5 exists for SMH, whose strikes near the money are 2.50 apart - without it
+# the only spread that can be built there is 5 wide, which doubles the capital
+# a single SMH position ties up and so halves the contracts risk.py will allow.
+WIDTHS = [1.0, 2.0, 2.5, 5.0]
+WIDTH_PREFERENCE = {1.0: 0.80, 2.0: 1.00, 2.5: 1.00, 5.0: 1.00}  # $1 wide pays
+                                                       # too little against
+                                                       # double bid-ask
 
 MIN_CREDIT_RATIO = 0.12
 MAX_CREDIT_RATIO = 0.60
