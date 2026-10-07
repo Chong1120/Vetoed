@@ -346,6 +346,16 @@ async def sync_fills(mcp, path: str | None = None, limit: int = 20) -> list:
                 journal.record_open_fill(row["id"], credit, qty, **kw)
                 notes.append("%s: open filled at $%.4f credit (quoted $%.4f)"
                              % (sym, credit, float(row.get("credit") or 0)))
+                # The limit is a floor on the credit, so a fill under it means
+                # the floor is not binding. That was true of 45 of the first 67
+                # fills, because the limit went to Alpaca with the wrong sign -
+                # see executor.submit_credit_spread. Say so in the journal
+                # rather than let it be found in a spreadsheet a month later.
+                want = float(row.get("limit_price") or 0)
+                if want > 0 and credit < want - 0.005:
+                    notes.append(
+                        "*** %s: filled at $%.2f but the limit asked $%.2f - the "
+                        "credit floor is not binding ***" % (sym, credit, want))
             else:
                 journal.record_close_fill(row["id"], price, filled_at, **kw)
                 notes.append("%s: close filled at $%.4f" % (sym, price))

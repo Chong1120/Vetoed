@@ -253,10 +253,23 @@ class AlpacaMCP:
                                    ) -> OrderResult:
         """Submit a defined-risk vertical credit spread as ONE mleg order.
 
-        limit_price is the NET CREDIT we require, as a positive number.
-        Alpaca treats a net-credit mleg limit order correctly when the short
-        leg dominates; we submit at or below the screener's mid estimate so we
-        are never worse off than the modelled economics.
+        `limit_price` is the NET CREDIT we require, as a positive number. It
+        goes to Alpaca NEGATED, and that sign is the whole point.
+
+        WHY. Alpaca's order API says of a multi-leg limit price: "A positive
+        value indicates a debit, representing a cost or payment to be made. A
+        negative value signifies a credit, reflecting an amount to be
+        received." This sent 0.47 - a DEBIT limit of forty-seven cents, read
+        as "pay up to $0.47 for this spread". Collecting any credit at all
+        satisfies that trivially, so the limit never bound: across the first
+        month 45 of 67 fills came back BELOW the credit they had asked for,
+        and the quoted premium of $68,871 was filled at $63,268. The missing
+        $5,603 is most of what the agent lost.
+
+        Negated, the same order says "pay at most minus forty-seven cents",
+        which is the floor it was always meant to be. A spread that cannot be
+        sold for the credit the screener measured now goes unfilled, which is
+        the correct outcome - the edge was in that credit.
         """
         short_sym = candidate["short_symbol"]
         long_sym = candidate["long_symbol"]
@@ -284,8 +297,9 @@ class AlpacaMCP:
             # limit_price as a string and rejects a float outright - the order
             # never reaches Alpaca, and the cycle records an uncertain result
             # for an order that was in fact never placed. Two decimals always,
-            # so 0.80 does not go out as "0.8".
-            "limit_price": "%.2f" % float(limit_price),
+            # so 0.80 does not go out as "0.8". Negative, because this is a
+            # credit: see the docstring.
+            "limit_price": "%.2f" % -abs(float(limit_price)),
             "legs": legs,
         }
         if client_order_id:

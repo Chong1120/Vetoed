@@ -179,11 +179,6 @@ class FakeMCP:
         return self.orders.get(oid, {"id": oid, "status": "new"})
 
 
-class _Market:
-    def option_delta(self, sym):
-        return None
-
-
 LEGS_UP_600 = {SHORT: {"unrealized_pl": "825"}, LONG: {"unrealized_pl": "-225"}}
 
 
@@ -202,7 +197,7 @@ def test_take_profit_on_an_adopted_row_is_recorded(monkeypatch):
     calls = _patch_journal(monkeypatch, [adopted])
     mcp = FakeMCP()
     import asyncio
-    asyncio.run(loop.manage_positions(mcp, _Market(), dry_run=False, legs=LEGS_UP_600))
+    asyncio.run(loop.manage_positions(mcp, dry_run=False, legs=LEGS_UP_600))
     assert len(mcp.closes) == 1
     assert len(calls) == 1, "the close must be written"
     (args, kwargs) = calls[0]
@@ -219,7 +214,7 @@ def test_two_rows_for_one_spread_send_one_close(monkeypatch):
     _patch_journal(monkeypatch, rows)
     mcp = FakeMCP()
     import asyncio
-    asyncio.run(loop.manage_positions(mcp, _Market(), dry_run=False, legs=LEGS_UP_600))
+    asyncio.run(loop.manage_positions(mcp, dry_run=False, legs=LEGS_UP_600))
     assert mcp.closes == [(SHORT, LONG, 25)], "a second close would buy back a short that is gone"
 
 

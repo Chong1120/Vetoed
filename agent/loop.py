@@ -54,14 +54,35 @@ from agent.data import Market
 from agent.executor import AlpacaMCP, new_client_order_id
 from agent.screener import UNIVERSE, screen
 
-# Exit rules - these are what realise P&L inside a short contest window.
-# UNCHANGED by the unattended-operation work: an audit found no bug in them,
-# and loosening a risk parameter to suit a deployment would be backwards.
+# Exit rules - these are what realise P&L.
+#
+# REVISED 7 Oct 2026, against the first month's record. The agent closed 68
+# spreads, won 72.1% of them, and finished at -$58, because the exits capped
+# every win at half the credit while letting the losses run to roughly a third
+# of the width. Replaying all 68 against the marks Alpaca actually published
+# (scripts/replay_marks.py reads them out of the journal's own git history)
+# showed the stop was the expensive half, and that tightening it makes things
+# worse rather than better, because nearly every adverse excursion recovered:
+#
+#     stop at 0.75x credit   -$627       stop at 1.5x    +$2,312
+#     stop at 1.0x           -$3,473     stop at 2.0x    +$8,448   <- was here
+#     stop at 1.25x          -$5,481     no stop        +$11,582
+#
+# The 20 trades that ever traded 1x credit or more against the position
+# realised -$21,745 and would have settled at +$3,037.
+#
+# So the delta stop is gone - 11 trades, -$17,575, not one of them a winner -
+# and the price stop moves to 3x, which over the whole month never triggered
+# and so is identical to having none, while still bounding a gap in a regime
+# this sample has not seen. The real cap was always the long leg: risk.py
+# sizes every position so that its full width is at most 5% of equity.
+#
+# Deliberately UNCHANGED: take profit at 50%. A higher target cannot be
+# measured from this data - the agent always closed there, so nothing recorded
+# what the position did next.
 TAKE_PROFIT_FRACTION = 0.50   # buy back at 50% of max profit
-STOP_LOSS_MULTIPLE = 2.0      # close if losing 2x the credit received
+STOP_LOSS_MULTIPLE = 3.0      # disaster backstop only; see above
 CLOSE_AT_DTE = 1              # never carry into expiry day
-DELTA_STOP_MULTIPLE = 2.0     # short leg delta doubles -> price is coming at
-                              # us; exit now rather than wait for -2x credit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEALTH_PATH = os.path.join(ROOT, "journal", "health.json")
@@ -177,7 +198,7 @@ def entry_limit_price(credit: float) -> float:
 # position management - runs BEFORE any new entry
 # --------------------------------------------------------------------------- #
 
-async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool,
+async def manage_positions(mcp: AlpacaMCP, dry_run: bool,
                            legs: dict | None = None) -> list[str]:
     """Close spreads that hit profit target, stop loss, or approach expiry.
 
@@ -229,17 +250,6 @@ async def manage_positions(mcp: AlpacaMCP, market, dry_run: bool,
             exp = _expiry_of(short_sym)
             if exp is not None and (exp - date.today()).days <= CLOSE_AT_DTE:
                 reason = "approaching expiry (DTE %d)" % (exp - date.today()).days
-            else:
-                # Delta stop: the short leg's delta doubling means the
-                # underlying is moving at us and the probability of loss has
-                # roughly doubled since entry. Cutting here turns some
-                # max-losses into partial losses.
-                entry_d = row.get("entry_short_delta")
-                if entry_d:
-                    now_d = market.option_delta(short_sym)
-                    if now_d and now_d >= float(entry_d) * DELTA_STOP_MULTIPLE:
-                        reason = ("delta stop (entry %.2f -> now %.2f)"
-                                  % (float(entry_d), now_d))
 
         if not reason:
             continue
@@ -335,7 +345,7 @@ async def run_cycle(dry_run: bool = True, force: bool = False,
                 log("fills: %s" % note)
 
         # --- 2. manage what we already hold -------------------------------- #
-        closed = await manage_positions(mcp, market, dry_run,
+        closed = await manage_positions(mcp, dry_run,
                                         legs=state.legs if state.reachable else None)
 
         # --- 3. account snapshot, built from BROKER-confirmed state -------- #

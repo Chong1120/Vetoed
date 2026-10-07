@@ -115,13 +115,29 @@ def test_limit_price_goes_out_as_a_string(monkeypatch):
     assert isinstance(args["limit_price"], str), (
         "a float here is rejected by the MCP server and the order is never "
         "placed, while the journal records it as uncertain")
-    assert args["limit_price"] == "0.77"
+    assert args["limit_price"] == "-0.77"
 
 
 def test_limit_price_keeps_two_decimals(monkeypatch):
     # str(round(0.80, 2)) is "0.8". Prices go out with both decimal places.
-    assert _payload(monkeypatch, 0.80)["limit_price"] == "0.80"
-    assert _payload(monkeypatch, 1.5)["limit_price"] == "1.50"
+    assert _payload(monkeypatch, 0.80)["limit_price"] == "-0.80"
+    assert _payload(monkeypatch, 1.5)["limit_price"] == "-1.50"
+
+
+def test_a_credit_limit_goes_out_NEGATIVE(monkeypatch):
+    """The sign is the floor, and it was wrong for the whole first month.
+
+    Alpaca's order API: "A positive value indicates a debit, representing a
+    cost or payment to be made. A negative value signifies a credit,
+    reflecting an amount to be received." Sending 0.77 asked to PAY up to
+    seventy-seven cents for a spread meant to collect it, which any credit
+    satisfies - so the limit never bound. 45 of the first 67 fills came back
+    below the credit they asked for, $5,603 in total, against a month that
+    finished down $58.
+    """
+    assert float(_payload(monkeypatch, 0.77)["limit_price"]) == -0.77
+    # Positive in, negative out, whichever way the caller passes it.
+    assert float(_payload(monkeypatch, -0.77)["limit_price"]) == -0.77
 
 
 def test_the_whole_payload_uses_strings_for_numbers(monkeypatch):
